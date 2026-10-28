@@ -1,0 +1,423 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    name: Check the version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          version=$(sed -n 's/^project(pollen VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt | head -n 1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::CMakeLists.txt says VERSION $version but the tag is $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config file xvfb \
+            libx11-dev libxft-dev libxrender-dev libfontconfig1-dev libfreetype-dev \
+            libssl-dev libpango1.0-dev libcairo2-dev zlib1g-dev libjpeg-dev \
+            libvulkan-dev libgl-dev
+
+      - name: Configure
+        run: |
+          lib=/usr/lib/$(gcc -print-multiarch)
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPOLLEN_PACKAGE=ON -DFIZMO_TUNE=OFF \
+            -DPOLLEN_PACKAGE_PLATFORM=linux-${{ matrix.arch }} \
+            -DJPEG_LIBRARY=$lib/libjpeg.a -DJPEG_LIBRARY_RELEASE=$lib/libjpeg.a \
+            -DZLIB_LIBRARY=$lib/libz.a -DZLIB_LIBRARY_RELEASE=$lib/libz.a
+
+      - name: Build
+        timeout-minutes: 100
+        run: cmake --build build -j 4
+
+      - name: Test
+        timeout-minutes: 20
+        working-directory: build
+        run: ctest --output-on-failure --timeout 600
+
+      - name: Check pollen only needs common system libraries
+        run: |
+          for exe in build/bin/pollen; do
+            readelf -d $exe | grep NEEDED
+            if readelf -d $exe | grep NEEDED | grep -E "libjpeg|libz\.|libstdc\+\+|libgcc_s"; then
+              echo "::error::$exe links to a library users may not have"
+              exit 1
+            fi
+          done
+
+      - name: Package
+        working-directory: build
+        run: cpack
+
+      - name: Test the archive
+        run: |
+          mkdir -p smoke
+          tar -xzf build/Pollen-*.tar.gz -C smoke
+          app=$(echo smoke/Pollen-*)
+          env -i PATH=/usr/bin:/bin HOME=$PWD/smoke/home $app/pollen --version
+          env -i PATH=/usr/bin:/bin HOME=$PWD/smoke/home $app/pollen --check | tee check.txt
+          grep "built-in window ok, 1 compiled script" check.txt
+          mkdir -p smoke/data
+          env -i PATH=/usr/bin:/bin HOME=$PWD/smoke/home POLLEN_CONFIG_DIR=$PWD/smoke/data \
+            timeout 20 xvfb-run -a $app/pollen > smoke/run.log 2>&1 || status=$?
+          cat smoke/run.log
+          if [ "${status:-0}" != "124" ]; then
+            echo "::error::pollen should keep its window open until it's closed (exit status ${status:-0})"
+            exit 1
+          fi
+          if grep -iE "error|failed" smoke/run.log; then
+            echo "::error::pollen reported a problem while starting"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pollen-linux-${{ matrix.arch }}
+          path: build/Pollen-*.tar.gz
+          if-no-files-found: error
+
+  windows-build:
+    name: Build for Windows ${{ matrix.platform }}
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-w64-mingw32
+            platform: windows-ucrt64
+            wine: true
+          - target: i686-w64-mingw32
+            platform: windows-i686
+            wine: false
+          - target: aarch64-w64-mingw32
+            platform: windows-clangarm64
+            wine: false
+    env:
+      LLVM_MINGW_VERSION: "20261020"
+      LLVM_MINGW: llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64
+      LLVM_MINGW_TARGET: ${{ matrix.target }}
+      LLVM_MINGW_DEPS: ${{ github.workspace }}/windows-deps
+      WINEDEBUG: -all
+      WINEPREFIX: ${{ github.workspace }}/.wineprefix
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          if [ "${{ matrix.wine }}" = "true" ]; then sudo apt-get install -y wine64; fi
+
+      - name: Cache llvm-mingw
+        id: llvm-mingw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/llvm-mingw
+          key: ${{ env.LLVM_MINGW }}
+
+      - name: Download llvm-mingw
+        if: steps.llvm-mingw-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fL --retry 5 --retry-delay 10 -o /tmp/llvm-mingw.tar.xz "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_VERSION/$LLVM_MINGW.tar.xz"
+          mkdir -p ~/llvm-mingw
+          tar -xf /tmp/llvm-mingw.tar.xz -C ~/llvm-mingw --strip-components=1
+
+      - name: Put llvm-mingw on the PATH
+        run: echo "$HOME/llvm-mingw/bin" >> "$GITHUB_PATH"
+
+      - name: Cache the Windows libraries
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: windows-deps
+          key: windows-deps-${{ matrix.target }}-${{ env.LLVM_MINGW }}-${{ hashFiles('.github/scripts/windows-deps.sh', 'cmake/llvm-mingw.cmake') }}
+
+      - name: Build zlib, libjpeg-turbo and the Vulkan headers
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: bash .github/scripts/windows-deps.sh "$LLVM_MINGW_TARGET" "$LLVM_MINGW_DEPS" "$RUNNER_TEMP/windows-deps-src"
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPOLLEN_PACKAGE=ON -DPOLLEN_BUNDLE=OFF -DFIZMO_TUNE=OFF \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake \
+            -DPOLLEN_PACKAGE_PLATFORM=${{ matrix.platform }} \
+            -DJPEG_LIBRARY="$LLVM_MINGW_DEPS/lib/libjpeg.a" -DJPEG_INCLUDE_DIR="$LLVM_MINGW_DEPS/include" \
+            -DZLIB_LIBRARY="$LLVM_MINGW_DEPS/lib/libzs.a" -DZLIB_INCLUDE_DIR="$LLVM_MINGW_DEPS/include"
+
+      - name: Build
+        timeout-minutes: 100
+        run: cmake --build build -j 4
+
+      - name: Test under Wine
+        if: matrix.wine
+        timeout-minutes: 20
+        working-directory: build
+        run: |
+          wineboot --init || true
+          ctest --output-on-failure --timeout 600
+
+      - name: Check pollen only needs DLLs that come with Windows
+        run: |
+          for exe in build/bin/pollen-host.exe build/bin/pollen_tests.exe; do
+            $LLVM_MINGW_TARGET-objdump -p $exe | grep "DLL Name"
+            if $LLVM_MINGW_TARGET-objdump -p $exe | grep "DLL Name" | grep -iE "libstdc|libgcc|libwinpthread|libc\+\+|libunwind|zlib|libjpeg"; then
+              echo "::error::$exe needs a DLL that users will not have"
+              exit 1
+            fi
+          done
+
+      - name: Gather what the Windows machine bundles
+        run: |
+          mkdir -p stage
+          cp build/bin/pollen-host.exe build/bin/pollen_tests.exe stage/
+          cp -r UI stage/ui
+          rm -rf stage/ui/.grove-cache
+          grove=$(sed -n 's/^grove_SOURCE_DIR:STATIC=//p' build/CMakeCache.txt)
+          cp -r "$grove/Include" stage/include
+          cp README.md stage/
+          if [ -f LICENSE ]; then cp LICENSE stage/; fi
+          sed -n 's/^project(pollen VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt | head -n 1 > stage/pollen-version.txt
+          sed -n 's/^set(POLLEN_WALNUT_TAG "v\([0-9][0-9.]*\)".*/\1/p' CMakeLists.txt | head -n 1 > stage/walnut-version.txt
+          cat stage/pollen-version.txt stage/walnut-version.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pollen-stage-${{ matrix.platform }}
+          path: stage
+          retention-days: 3
+          if-no-files-found: error
+
+  windows:
+    name: Windows ${{ matrix.platform }}
+    needs: windows-build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-ucrt64
+            runner: windows-latest
+          - platform: windows-i686
+            runner: windows-latest
+          - platform: windows-clangarm64
+            runner: windows-11-arm
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pollen-stage-${{ matrix.platform }}
+          path: stage
+
+      - name: Run the tests
+        run: |
+          ./stage/pollen_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Get Walnut with its compiler
+        run: |
+          $walnut = (Get-Content stage/walnut-version.txt -Raw).Trim()
+          $name = "Walnut-$walnut-${{ matrix.platform }}-with-compiler"
+          $url = "https://github.com/ThatNewCoderJSCpp/Walnut/releases/download/v$walnut/$name.zip"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            & curl.exe -fL --retry 3 -o walnut.zip $url
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($attempt -eq 5) { Write-Output "::error::couldn't download $url; check that Walnut v$walnut's release has its -with-compiler packages, or change POLLEN_WALNUT_TAG"; exit 1 }
+            Start-Sleep -Seconds (30 * $attempt)
+          }
+          & tar.exe -xf walnut.zip
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          "WALNUT_EXE=$((Resolve-Path "$name/bin/walnut.exe").Path)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Bundle the window and its compiled script into pollen.exe
+        run: |
+          $env:POLLEN_UI_DIR = (Resolve-Path stage/ui).Path
+          $env:GROVE_INCLUDE_DIR = (Resolve-Path stage/include).Path
+          $env:GROVE_WALNUT = $env:WALNUT_EXE
+          $env:GROVE_CACHE_DIR = "$env:RUNNER_TEMP\pollen-cache"
+          & $env:WALNUT_EXE init --status
+          & ./stage/pollen-host.exe --bundle "$PWD\pollen.exe" --portable | Out-Host
+          if (-not (Test-Path pollen.exe)) { Write-Output "::error::pollen-host didn't write pollen.exe"; exit 1 }
+
+      - name: Package
+        run: |
+          $version = (Get-Content stage/pollen-version.txt -Raw).Trim()
+          $name = "Pollen-$version-${{ matrix.platform }}"
+          New-Item -ItemType Directory -Path "package/$name" | Out-Null
+          Copy-Item pollen.exe, stage/README.md "package/$name/"
+          if (Test-Path stage/LICENSE) { Copy-Item stage/LICENSE "package/$name/" }
+          Compress-Archive -Path "package/$name" -DestinationPath "$name.zip"
+          "PACKAGE=$name" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Test the package
+        run: |
+          Expand-Archive "$env:PACKAGE.zip" -DestinationPath smoke
+          $app = "smoke\$env:PACKAGE"
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+          $p = Start-Process -FilePath "$app\pollen.exe" -ArgumentList "--check" -Wait -PassThru -NoNewWindow -RedirectStandardOutput check.txt -RedirectStandardError check-err.txt
+          Get-Content check.txt, check-err.txt
+          if ($p.ExitCode -ne 0) { exit 1 }
+          if (-not (Select-String -Path check.txt -Pattern "built-in window ok, 1 compiled script" -Quiet)) { Write-Output "::error::pollen --check didn't find its built-in window and its script"; exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pollen-${{ matrix.platform }}
+          path: Pollen-*.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-latest
+          - arch: x86_64
+            runner: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        if: matrix.arch == 'arm64'
+        run: |
+          brew update
+          brew install ninja pkg-config fontconfig freetype harfbuzz openssl@3 jpeg-turbo zlib vulkan-headers
+          echo "FIZMO_VULKAN_INC=$(brew --prefix vulkan-headers)/include" >> "$GITHUB_ENV"
+
+      - name: Install dependencies (Intel)
+        if: matrix.arch == 'x86_64'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_UPGRADE: 1
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+        run: |
+          brew list --versions ninja pkgconf fontconfig freetype harfbuzz openssl@3 jpeg-turbo
+          git clone --depth 1 --branch v1.4.363 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vulkan-headers"
+          echo "FIZMO_VULKAN_INC=$RUNNER_TEMP/vulkan-headers/include" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: |
+          prefix=$(brew --prefix)
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPOLLEN_PACKAGE=ON -DFIZMO_TUNE=OFF \
+            -DPOLLEN_PACKAGE_PLATFORM=macos-${{ matrix.arch }} \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+            -DFIZMO_VULKAN_INCLUDE_DIR="$FIZMO_VULKAN_INC" \
+            -DCMAKE_PREFIX_PATH="$prefix;$(brew --prefix jpeg-turbo);$(brew --prefix zlib)"
+
+      - name: Build
+        timeout-minutes: 120
+        run: cmake --build build -j 4
+
+      - name: Test
+        timeout-minutes: 20
+        working-directory: build
+        run: ctest --output-on-failure --timeout 600
+
+      - name: Show the libraries pollen needs
+        run: |
+          ls -la build/bin/lib
+          for exe in build/bin/pollen; do
+            otool -L $exe
+          done
+
+      - name: Package
+        working-directory: build
+        run: cpack
+
+      - name: Test the archive
+        run: |
+          mkdir -p smoke
+          tar -xzf build/Pollen-*.tar.gz -C smoke
+          app=$(echo smoke/Pollen-*)
+          $app/pollen --version
+          $app/pollen --check | tee check.txt
+          grep "built-in window ok, 1 compiled script" check.txt
+
+      - name: Check the package doesn't need Homebrew
+        run: |
+          app=$(echo smoke/Pollen-*)
+          homebrew="/opt/homebrew|/usr/local/(opt|Cellar|lib)/"
+          ls -la $app/lib
+          for f in $app/pollen $app/lib/*.dylib; do
+            if otool -L "$f" | tail -n +2 | grep -E "$homebrew"; then
+              echo "::error::$f still links to Homebrew's copy of a library"
+              exit 1
+            fi
+          done
+          rm -rf smoke/cache
+          XDG_CACHE_HOME=$PWD/smoke/cache DYLD_PRINT_LIBRARIES=1 $app/pollen --check 2> dyld.txt
+          if grep -E "$homebrew" dyld.txt; then
+            echo "::error::pollen loaded a library from Homebrew instead of its own lib folder"
+            exit 1
+          fi
+          found=0
+          for m in $(find smoke/cache -type f -name 'script*'); do
+            found=1
+            otool -L "$m"
+            if otool -L "$m" | tail -n +2 | grep -E "$homebrew"; then
+              echo "::error::the compiled script $m links to Homebrew"
+              exit 1
+            fi
+          done
+          if [ "$found" = 0 ]; then echo "::warning::--check didn't unpack the compiled script, so it wasn't checked"; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pollen-macos-${{ matrix.arch }}
+          path: build/Pollen-*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Attach packages to the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: packages/*
+          fail_on_unmatched_files: true

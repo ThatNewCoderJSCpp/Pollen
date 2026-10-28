@@ -1,0 +1,204 @@
+<!grove max-fps=60 idle-fps=10>
+<grove>
+    <head>
+        <title>Pollen</title>
+        <style src="pollen.bark"></style>
+        <script lang="walnut" src="pollen.wal"></script>
+    </head>
+    <body id="app" title="Pollen" app-id="pollen">
+        <row class="appbar">
+            <text class="brand">&#10047; Pollen</text>
+            <row id="pill" class="pill">
+                <text id="pill-dot" class="dot"></text>
+                <text id="pill-text">Starting...</text>
+            </row>
+            <div class="grow"></div>
+            <button class="tab" to="home">Dashboard</button>
+            <button class="tab" to="params">Parameters</button>
+            <button class="tab" to="chat">Chatbox</button>
+            <button class="tab" to="monitor">Monitor</button>
+            <button class="tab" to="settings">Settings</button>
+            <text id="version" class="muted version"></text>
+        </row>
+
+        <page id="home" current>
+            <column class="scroll page-body">
+                <row class="cards">
+                    <column class="card">
+                        <div class="card-title">Connection</div>
+                        <div id="conn-state" class="big">Not connected</div>
+                        <row class="kv"><text class="k">Sending to</text><text id="conn-target" class="v mono">-</text></row>
+                        <row class="kv"><text class="k">Listening on</text><text id="conn-listen" class="v mono">-</text></row>
+                        <row class="kv"><text class="k">Last heard</text><text id="conn-heard" class="v">never</text></row>
+                        <row class="kv"><text class="k">OSCQuery</text><text id="conn-query" class="v">-</text></row>
+                        <div id="conn-error" class="error hidden"></div>
+                        <row class="actions">
+                            <button id="connect" class="primary">Connect</button>
+                            <button id="disconnect" class="ghost">Disconnect</button>
+                        </row>
+                    </column>
+                    <column class="card">
+                        <div class="card-title">Avatar</div>
+                        <div id="av-name" class="big">No avatar yet</div>
+                        <row class="kv"><text class="k">ID</text><text id="av-id" class="v mono">-</text></row>
+                        <row class="kv"><text class="k">Parameters</text><text id="av-count" class="v">0</text></row>
+                        <row class="kv"><text class="k">Seen live</text><text id="av-live" class="v">0</text></row>
+                        <row class="actions">
+                            <button id="av-reload" class="ghost">Reload parameters</button>
+                            <button class="ghost" to="params">Open parameters</button>
+                        </row>
+                    </column>
+                </row>
+                <row class="cards">
+                    <column class="card">
+                        <div class="card-title">Traffic</div>
+                        <row class="stats">
+                            <column class="stat"><div id="st-in" class="stat-num">0</div><div class="stat-label">received</div></column>
+                            <column class="stat"><div id="st-out" class="stat-num">0</div><div class="stat-label">sent</div></column>
+                            <column class="stat"><div id="st-err" class="stat-num">0</div><div class="stat-label">errors</div></column>
+                        </row>
+                    </column>
+                    <column class="card">
+                        <div class="card-title">This computer</div>
+                        <row class="stats">
+                            <column class="stat"><div id="sys-cpu" class="stat-num">-</div><div class="stat-label">CPU</div></column>
+                            <column class="stat"><div id="sys-ram" class="stat-num">-</div><div class="stat-label">RAM</div></column>
+                            <column class="stat"><div id="sys-up" class="stat-num small">-</div><div class="stat-label">uptime</div></column>
+                        </row>
+                        <row class="kv"><text class="k">Now playing</text><text id="sys-song" class="v">-</text></row>
+                    </column>
+                </row>
+                <column class="card hint-card">
+                    <div class="card-title">Getting VRChat talking</div>
+                    <p class="hint">In VRChat open the Action Menu, then Options, OSC, and turn it on. VRChat listens on port 9000 and sends to port 9001. If another OSC app already has port 9001, Pollen listens on a free port instead and tells VRChat where through OSCQuery.</p>
+                    <p class="hint">On Linux VRChat runs through Proton but still uses your computer's network, so nothing extra is needed. On a Mac, VRChat can't run, so point Pollen at the PC that runs it.</p>
+                </column>
+            </column>
+        </page>
+
+        <page id="params">
+            <row class="toolbar">
+                <input_string id="param-filter" class="search" placeholder="Search parameters" />
+                <input_bool id="param-writable" switch>Only ones I can set</input_bool>
+                <div class="grow"></div>
+                <text id="param-count" class="muted"></text>
+            </row>
+            <column id="param-list" class="scroll list"></column>
+            <row class="toolbar bottom">
+                <text class="muted">Set any parameter</text>
+                <input_string id="custom-name" class="custom-name" placeholder="Name" />
+                <input_select id="custom-type" class="custom-type" value="float">
+                    <option value="bool">bool</option>
+                    <option value="int">int</option>
+                    <option value="float">float</option>
+                </input_select>
+                <input_string id="custom-value" class="custom-value" placeholder="Value" />
+                <button id="custom-send" class="primary">Send</button>
+            </row>
+        </page>
+
+        <page id="chat">
+            <column class="scroll page-body">
+                <column class="card">
+                    <row class="card-head">
+                        <div class="card-title">What VRChat shows</div>
+                        <div class="grow"></div>
+                        <text id="preview-source" class="muted"></text>
+                    </row>
+                    <column class="scene">
+                        <row id="typing-bubble" class="typing hidden"><text class="tdot">&#9679;</text><text class="tdot">&#9679;</text><text class="tdot">&#9679;</text></row>
+                        <column id="bubble" class="bubble hidden"><div id="bubble-text" class="bubble-text"></div></column>
+                        <div id="bubble-empty" class="bubble-empty">The chatbox is empty</div>
+                        <div class="nameplate">You</div>
+                    </column>
+                </column>
+                <column class="card">
+                    <div class="card-title">Say something</div>
+                    <row class="compose">
+                        <input_string id="chat-text" class="chat-text" maxlength="144" placeholder="Type a message for the chatbox" />
+                        <button id="chat-send" class="primary">Send</button>
+                    </row>
+                    <row class="compose-meta">
+                        <input_bool id="chat-notify" switch>Play the notification sound</input_bool>
+                        <input_bool id="chat-typing" switch checked>Show the typing bubble while I type</input_bool>
+                        <div class="grow"></div>
+                        <text id="chat-count" class="muted mono">0 / 144</text>
+                    </row>
+                    <row class="actions">
+                        <button id="chat-clear" class="ghost">Clear the chatbox</button>
+                    </row>
+                </column>
+                <column class="card">
+                    <row class="card-head">
+                        <div class="card-title">Status messages</div>
+                        <div class="grow"></div>
+                        <input_bool id="status-on" switch>Send automatically</input_bool>
+                    </row>
+                    <p class="hint">Pollen sends this to the chatbox on a timer. Put a line with only --- between messages to rotate through them. A line whose placeholders are all empty is left out, so a song line disappears when nothing is playing.</p>
+                    <input_code id="status-template" class="template" language="text" line-numbers="false" autocomplete="false"></input_code>
+                    <row class="placeholders" id="placeholders"></row>
+                    <row class="compose-meta">
+                        <text class="muted">Every</text>
+                        <input_float id="status-interval" class="interval" value="3" min="2" max="120" step="0.5" />
+                        <text class="muted">seconds</text>
+                        <input_bool id="status-notify" switch>Play the sound each time</input_bool>
+                        <div class="grow"></div>
+                        <button id="status-send" class="ghost">Send one now</button>
+                    </row>
+                    <div class="sub-title">Preview</div>
+                    <pre id="status-preview" class="preview"></pre>
+                </column>
+            </column>
+        </page>
+
+        <page id="monitor">
+            <row class="toolbar">
+                <input_bool id="mon-params" switch>Show parameter traffic</input_bool>
+                <input_bool id="mon-pause" switch>Pause</input_bool>
+                <div class="grow"></div>
+                <button id="mon-clear" class="ghost">Clear</button>
+            </row>
+            <column id="log" class="scroll log"></column>
+            <row class="toolbar bottom">
+                <input_string id="raw" class="raw mono" placeholder="/avatar/parameters/Name 0.5   or   /chatbox/input &quot;hi&quot; true false" />
+                <button id="raw-send" class="primary">Send</button>
+            </row>
+            <div id="raw-error" class="error hidden"></div>
+        </page>
+
+        <page id="settings">
+            <column class="scroll page-body">
+                <column class="card">
+                    <div class="card-title">Where VRChat is</div>
+                    <row class="field"><text class="label">VRChat's address</text><input_string id="set-host" class="wide" placeholder="127.0.0.1" /></row>
+                    <row class="field"><text class="label">Send to port</text><input_integer id="set-send-port" min="1" max="65535" value="9000" /></row>
+                    <row class="field"><text class="label">Listen on port</text><input_integer id="set-recv-port" min="0" max="65535" value="9001" /><text class="muted">0 only sends</text></row>
+                    <row class="field"><text class="label">Listen on address</text><input_string id="set-listen-host" class="wide" placeholder="127.0.0.1" /><text class="muted">0.0.0.0 for other computers</text></row>
+                    <row class="field"><text class="label"></text><input_bool id="set-auto" switch>Connect when Pollen starts</input_bool></row>
+                    <row class="field"><text class="label"></text><input_bool id="set-oscquery" switch>Find VRChat with OSCQuery</input_bool></row>
+                    <p class="hint">With OSCQuery, VRChat and Pollen find each other on their own: VRChat sends to whatever port Pollen listens on, so Pollen can share VRChat with other OSC apps, and Pollen reads every parameter of your avatar straight from VRChat.</p>
+                    <row class="actions">
+                        <button id="set-apply" class="primary">Save and reconnect</button>
+                        <text id="set-result" class="muted"></text>
+                    </row>
+                </column>
+                <column class="card">
+                    <div class="card-title">VRChat's OSC folder</div>
+                    <p class="hint">Pollen reads each avatar's parameter list from here. It looks in Proton's prefix for every Steam library it finds, so most people never need to set this.</p>
+                    <row class="field">
+                        <text class="label">Extra folder</text>
+                        <input_file id="set-folder" mode="folder" title="Pick VRChat's OSC folder">Choose folder...</input_file>
+                        <button id="set-folder-clear" class="ghost">Forget it</button>
+                    </row>
+                    <div class="sub-title">Folders found</div>
+                    <column id="folders" class="folders"></column>
+                </column>
+                <column class="card">
+                    <div class="card-title">About</div>
+                    <p class="hint">Pollen is a VRChat OSC app that runs on Linux, Windows and macOS, built with Fizmo, Grove and Walnut.</p>
+                    <row class="kv"><text class="k">Settings file</text><text id="set-path" class="v mono"></text></row>
+                </column>
+            </column>
+        </page>
+    </body>
+</grove>

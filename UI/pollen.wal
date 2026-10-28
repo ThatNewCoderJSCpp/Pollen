@@ -1,0 +1,802 @@
+import module.grove
+import module.strings
+import module.io
+
+string: param_revision = "";
+string: param_filter = "";
+bool: param_writable_only = false;
+long int: param_rows = 0l;
+string: log_seq = "0";
+long int: log_lines = 0l;
+bool: typing_sent = false;
+string: status_text_shown = "";
+string: last_sent = "";
+string: compose_now = "";
+
+function call(const string&: name, const string&: arg) -> string;
+function el(const string&: tag, const string&: cls, const string&: label) -> grove::Element;
+function clear(grove::Element&: e) -> void;
+function tab2(const string&: a, const string&: b) -> string;
+function tab3(const string&: a, const string&: b, const string&: c) -> string;
+function show(const string&: id, bool: on) -> void;
+function set_text(const string&: id, const string&: msg) -> void;
+function failed(const string&: result) -> bool;
+function reason(const string&: result) -> string;
+function unescape(const string&: s) -> string;
+function touched_recently(grove::Element&: e) -> bool;
+function mark_touched(grove::Element&: e) -> void;
+function update_state() -> void;
+function update_system() -> void;
+function build_params() -> void;
+function update_params() -> void;
+function send_param(const string&: name, const string&: type, const string&: value) -> void;
+function update_log() -> void;
+function add_log_line(const string&: kind, const string&: seconds, const string&: msg) -> void;
+function load_settings() -> void;
+function update_preview() -> void;
+function update_count(const string&: msg) -> void;
+function send_chat(const string&: msg) -> void;
+function set_typing(bool: on) -> void;
+function fill_folders() -> void;
+function update_bubble() -> void;
+
+function call(const string&: name, const string&: arg) -> string {
+    return grove::call("pollen." + name, arg);
+} end function call
+
+function el(const string&: tag, const string&: cls, const string&: label) -> grove::Element {
+    grove::Element: e = grove::create_element(tag);
+    if (!cls.empty()) then {
+        e.set_attribute("class", cls);
+    }
+    if (!label.empty()) then {
+        e.set_inner_text(label);
+    }
+    return e;
+} end function el
+
+function clear(grove::Element&: e) -> void {
+    while (e.child_count() > 0l) {
+        e.child(0l).remove();
+    }
+} end function clear
+
+function tab2(const string&: a, const string&: b) -> string {
+    return a + "\t" + b;
+} end function tab2
+
+function tab3(const string&: a, const string&: b, const string&: c) -> string {
+    return a + "\t" + b + "\t" + c;
+} end function tab3
+
+function show(const string&: id, bool: on) -> void {
+    grove::Element: e = grove::get_by_id(id);
+    if (on) then {
+        e.remove_class("hidden");
+    } else then {
+        e.add_class("hidden");
+    }
+} end function show
+
+function set_text(const string&: id, const string&: msg) -> void {
+    grove::get_by_id(id).set_inner_text(msg);
+} end function set_text
+
+function failed(const string&: result) -> bool {
+    return result.starts_with("error");
+} end function failed
+
+function reason(const string&: result) -> string {
+    auto: f = result.split("\t");
+    if (f.size() > 1l) then {
+        return f[1];
+    }
+    return result;
+} end function reason
+
+function unescape(const string&: s) -> string {
+    string: out = "";
+    long int: i = 0l;
+    while (i < s.length()) {
+        string: c = s.substr(i, 1l);
+        if (c == "\\" && i + 1l < s.length()) then {
+            string: n = s.substr(i + 1l, 1l);
+            if (n == "n") then {
+                out = out + "\n";
+            } else if (n == "t") then {
+                out = out + "\t";
+            } else then {
+                out = out + n;
+            }
+            i += 2l;
+        } else then {
+            out = out + c;
+            i += 1l;
+        }
+    }
+    return out;
+} end function unescape
+
+function touched_recently(grove::Element&: e) -> bool {
+    string: t = e.get_attribute("touched");
+    if (t.empty()) then {
+        return false;
+    }
+    short float: when = std::io::parse_float<short float>(t);
+    return grove::time_ms() - when < 1500.0;
+} end function touched_recently
+
+function mark_touched(grove::Element&: e) -> void {
+    e.set_attribute("touched", grove::time_ms().to_string());
+} end function mark_touched
+
+function update_state() -> void {
+    auto: f = call("state", "").split("\t");
+    if (f.size() < 16l) then {
+        return;
+    }
+    bool: sending = f[0] == "1";
+    bool: hearing = f[1] == "1";
+    grove::Element: pill = grove::get_by_id("pill");
+    pill.remove_class("ok");
+    pill.remove_class("waiting");
+    pill.remove_class("off");
+    if (!sending) then {
+        pill.add_class("off");
+        set_text("pill-text", "Not connected");
+        set_text("conn-state", "Not connected");
+    } else if (hearing) then {
+        pill.add_class("ok");
+        set_text("pill-text", "VRChat is talking");
+        set_text("conn-state", "Connected");
+    } else then {
+        pill.add_class("waiting");
+        if (f[3].empty()) then {
+            set_text("pill-text", "Sending only");
+            set_text("conn-state", "Sending only");
+        } else then {
+            set_text("pill-text", "Waiting for VRChat");
+            set_text("conn-state", "Waiting for VRChat");
+        }
+    }
+    set_text("pill-dot", "\u{25CF}");
+    if (sending) then {
+        set_text("connect", "Reconnect");
+    } else then {
+        set_text("connect", "Connect");
+    }
+    if (f[2].empty()) then {
+        set_text("conn-target", "-");
+    } else then {
+        set_text("conn-target", f[2]);
+    }
+    if (f[3].empty()) then {
+        set_text("conn-listen", "not listening");
+    } else then {
+        set_text("conn-listen", f[3]);
+    }
+    if (f[7] == "-1") then {
+        set_text("conn-heard", "never");
+    } else then {
+        set_text("conn-heard", f[7] + " s ago");
+    }
+    set_text("st-in", f[4]);
+    set_text("st-out", f[5]);
+    set_text("st-err", f[6]);
+    if (f[8].empty()) then {
+        set_text("av-name", "No avatar yet");
+    } else then {
+        set_text("av-name", f[8]);
+    }
+    if (f[9].empty()) then {
+        set_text("av-id", "-");
+    } else then {
+        set_text("av-id", f[9]);
+    }
+    set_text("av-count", f[15]);
+    if (f.size() > 16l) then {
+        set_text("conn-query", f[16]);
+    }
+    if (sending && !hearing && f.size() > 17l && f[17] == "1") then {
+        set_text("pill-text", "Found VRChat");
+    }
+    set_text("av-live", f[14]);
+    set_text("conn-error", f[12]);
+    show("conn-error", !f[12].empty());
+    if (f[10] != param_revision) then {
+        param_revision = f[10];
+        build_params();
+    }
+} end function update_state
+
+function update_system() -> void {
+    auto: f = call("system", "").split("\t");
+    if (f.size() < 8l) then {
+        return;
+    }
+    set_text("sys-cpu", f[0]);
+    set_text("sys-ram", f[1]);
+    set_text("sys-up", f[3]);
+    if (!f[4].empty()) then {
+        if (f[5] == "playing") then {
+            set_text("sys-song", "\u{25B6} " + f[4]);
+        } else then {
+            set_text("sys-song", "\u{23F8} " + f[4]);
+        }
+    } else if (!f[7].empty()) then {
+        set_text("sys-song", f[7]);
+    } else then {
+        set_text("sys-song", "-");
+    }
+} end function update_system
+
+function send_param(const string&: name, const string&: type, const string&: value) -> void {
+    string: r = call("set_param", tab3(name, type, value));
+    if (failed(r)) then {
+        grove::log("pollen: " + reason(r));
+    }
+} end function send_param
+
+function build_params() -> void {
+    grove::Element: box = grove::get_by_id("param-list");
+    clear(box);
+    auto: rows = call("params", param_filter).split("\n");
+    long int: shown = 0l;
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 6l) then {
+            continue;
+        }
+        string: name = f[0];
+        string: type = f[1];
+        bool: writable = f[3] == "1";
+        if (param_writable_only && !writable) then {
+            continue;
+        }
+        string: idx = shown.to_string();
+        grove::Element: row = el("row", "param", "");
+        row.set_attribute("id", "prow-" + idx);
+        row.set_attribute("param", name);
+        grove::Element: label = el("div", "param-name", name);
+        if (f[4] != "1") then {
+            label.add_class("unknown");
+            label.set_attribute("title", "Not in this avatar's OSC file; seen live from VRChat");
+        }
+        row.append_child(label);
+        row.append_child(el("text", "badge " + type, type));
+        grove::Element: control = el("row", "param-control", "");
+        if (!writable) then {
+            control.append_child(el("text", "readonly", "read only"));
+        } else if (type == "bool") then {
+            grove::Element: b = grove::create_element("input_bool");
+            b.set_attribute("id", "pc-" + idx);
+            b.set_attribute("switch", "");
+            b.set_value_bool(f[2] == "true");
+            b.on("change", [name](grove::Event&: e) -> void {
+                grove::Element: t = e.target();
+                mark_touched(t);
+                if (t.value_bool()) then {
+                    send_param(name, "bool", "true");
+                } else then {
+                    send_param(name, "bool", "false");
+                }
+            });
+            control.append_child(b);
+        } else if (type == "int") then {
+            grove::Element: n = grove::create_element("input_integer");
+            n.set_attribute("id", "pc-" + idx);
+            n.set_attribute("class", "param-int");
+            n.set_attribute("min", "0");
+            n.set_attribute("max", "255");
+            if (f[2].empty()) then {
+                n.set_attribute("value", "0");
+            } else then {
+                n.set_attribute("value", f[2]);
+            }
+            n.on("change", [name](grove::Event&: e) -> void {
+                grove::Element: t = e.target();
+                mark_touched(t);
+                send_param(name, "int", t.value_integer().to_string());
+            });
+            control.append_child(n);
+        } else if (type == "float") then {
+            grove::Element: s = grove::create_element("input_slider");
+            s.set_attribute("id", "pc-" + idx);
+            s.set_attribute("class", "param-slider");
+            s.set_attribute("min", "-1");
+            s.set_attribute("max", "1");
+            s.set_attribute("step", "0.01");
+            if (!f[2].empty()) then {
+                s.set_value_float(std::io::parse_float<short float>(f[2]));
+            }
+            s.on("input", [name](grove::Event&: e) -> void {
+                grove::Element: t = e.target();
+                mark_touched(t);
+                send_param(name, "float", t.value_float().to_string());
+            });
+            control.append_child(s);
+        } else then {
+            grove::Element: v = grove::create_element("input_string");
+            v.set_attribute("id", "pc-" + idx);
+            v.set_attribute("class", "param-int");
+            v.set_attribute("placeholder", "value");
+            v.on("change", [name](grove::Event&: e) -> void {
+                grove::Element: t = e.target();
+                mark_touched(t);
+                send_param(name, "", t.value_string());
+            });
+            control.append_child(v);
+        }
+        row.append_child(control);
+        grove::Element: value = el("text", "param-value", f[2]);
+        value.set_attribute("id", "pv-" + idx);
+        row.append_child(value);
+        box.append_child(row);
+        shown += 1l;
+    }
+    param_rows = shown;
+    if (shown == 0l) then {
+        if (param_filter.empty()) then {
+            box.append_child(el("p", "empty", "No parameters yet. Turn OSC on in VRChat and change avatars once, and they'll show up here as VRChat sends them."));
+        } else then {
+            box.append_child(el("p", "empty", "Nothing matches \"" + param_filter + "\"."));
+        }
+        set_text("param-count", "");
+    } else then {
+        set_text("param-count", shown.to_string() + " shown");
+    }
+} end function build_params
+
+function update_params() -> void {
+    if (param_rows == 0l) then {
+        return;
+    }
+    if (!grove::get_by_id("params").is_current()) then {
+        return;
+    }
+    auto: rows = call("params", param_filter).split("\n");
+    long int: shown = 0l;
+    for (long int: i = 0l; i < rows.size() && shown < param_rows; i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 6l) then {
+            continue;
+        }
+        if (param_writable_only && f[3] != "1") then {
+            continue;
+        }
+        string: idx = shown.to_string();
+        shown += 1l;
+        grove::Element: row = grove::get_by_id("prow-" + idx);
+        if (!row.exists() || row.get_attribute("param") != f[0]) then {
+            build_params();
+            return;
+        }
+        set_text("pv-" + idx, f[2]);
+        grove::Element: c = grove::get_by_id("pc-" + idx);
+        if (!c.exists() || f[2].empty() || touched_recently(c) || c.focused()) then {
+            continue;
+        }
+        if (f[1] == "bool") then {
+            c.set_value_bool(f[2] == "true");
+        } else if (f[1] == "int") then {
+            c.set_value_integer(std::io::parse_int<long int>(f[2]));
+        } else if (f[1] == "float") then {
+            c.set_value_float(std::io::parse_float<short float>(f[2]));
+        }
+    }
+} end function update_params
+
+function add_log_line(const string&: kind, const string&: seconds, const string&: msg) -> void {
+    grove::Element: box = grove::get_by_id("log");
+    grove::Element: row = el("row", "log-line " + kind, "");
+    row.append_child(el("text", "log-time", seconds));
+    string: arrow = "\u{2022}";
+    if (kind == "i") then {
+        arrow = "\u{2190}";
+    } else if (kind == "o") then {
+        arrow = "\u{2192}";
+    } else if (kind == "e") then {
+        arrow = "!";
+    }
+    row.append_child(el("text", "log-dir", arrow));
+    row.append_child(el("div", "log-text", msg));
+    box.append_child(row);
+    log_lines += 1l;
+    while (log_lines > 500l) {
+        box.child(0l).remove();
+        log_lines -= 1l;
+    }
+} end function add_log_line
+
+function update_log() -> void {
+    if (grove::get_by_id("mon-pause").value_bool()) then {
+        return;
+    }
+    auto: rows = call("log", log_seq).split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 4l) then {
+            continue;
+        }
+        log_seq = f[0];
+        add_log_line(f[1], f[2], f[3]);
+    }
+} end function update_log
+
+function load_settings() -> void {
+    auto: rows = call("settings", "").split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 2l) then {
+            continue;
+        }
+        string: k = f[0];
+        string: v = f[1];
+        if (k == "host") then {
+            grove::get_by_id("set-host").set_value_string(v);
+        } else if (k == "send_port") then {
+            grove::get_by_id("set-send-port").set_value_integer(std::io::parse_int<long int>(v));
+        } else if (k == "receive_port") then {
+            grove::get_by_id("set-recv-port").set_value_integer(std::io::parse_int<long int>(v));
+        } else if (k == "listen_host") then {
+            grove::get_by_id("set-listen-host").set_value_string(v);
+        } else if (k == "auto_connect") then {
+            grove::get_by_id("set-auto").set_value_bool(v == "1");
+        } else if (k == "oscquery") then {
+            grove::get_by_id("set-oscquery").set_value_bool(v == "1");
+        } else if (k == "status_enabled") then {
+            grove::get_by_id("status-on").set_value_bool(v == "1");
+        } else if (k == "status_interval") then {
+            grove::get_by_id("status-interval").set_value_float(std::io::parse_float<short float>(v));
+        } else if (k == "status_notify") then {
+            grove::get_by_id("status-notify").set_value_bool(v == "1");
+        } else if (k == "log_parameters") then {
+            grove::get_by_id("mon-params").set_value_bool(v == "1");
+        } else if (k == "status_template") then {
+            grove::get_by_id("status-template").set_value_string(unescape(v));
+        } else if (k == "osc_folder") then {
+            grove::get_by_id("set-folder").set_attribute("placeholder", v);
+        } else if (k == "settings_path") then {
+            set_text("set-path", v);
+        }
+    }
+} end function load_settings
+
+function update_preview() -> void {
+    string: msg = call("status_preview", "");
+    if (msg != status_text_shown) then {
+        status_text_shown = msg;
+        if (msg.empty()) then {
+            set_text("status-preview", "(nothing to send right now)");
+        } else then {
+            set_text("status-preview", msg);
+        }
+    }
+} end function update_preview
+
+function update_count(const string&: msg) -> void {
+    set_text("chat-count", call("chat_length", msg) + " / 144");
+} end function update_count
+
+function set_typing(bool: on) -> void {
+    if (on == typing_sent) then {
+        return;
+    }
+    if (on && !grove::get_by_id("chat-typing").value_bool()) then {
+        return;
+    }
+    typing_sent = on;
+    if (on) then {
+        call("typing", "1");
+    } else then {
+        call("typing", "0");
+    }
+} end function set_typing
+
+function send_chat(const string&: msg) -> void {
+    if (msg.trim().empty()) then {
+        return;
+    }
+    string: notify = "0";
+    if (grove::get_by_id("chat-notify").value_bool()) then {
+        notify = "1";
+    }
+    string: r = call("chatbox", tab2(msg, notify));
+    typing_sent = false;
+    if (failed(r)) then {
+        grove::popup_warning("Couldn't send", reason(r));
+        return;
+    }
+    last_sent = msg;
+    compose_now = "";
+    grove::get_by_id("chat-text").set_value_string("");
+    update_count("");
+    update_bubble();
+} end function send_chat
+
+function update_bubble() -> void {
+    string: source = "";
+    string: shown = "";
+    if (!compose_now.trim().empty()) then {
+        source = "as you type";
+        shown = compose_now;
+    } else if (grove::get_by_id("status-on").value_bool() && !status_text_shown.empty()) then {
+        source = "status message";
+        shown = status_text_shown;
+    } else if (!last_sent.empty()) then {
+        source = "last message";
+        shown = last_sent;
+    }
+    set_text("preview-source", source);
+    show("typing-bubble", typing_sent);
+    if (shown.empty()) then {
+        show("bubble", false);
+        show("bubble-empty", !typing_sent);
+        return;
+    }
+    show("bubble-empty", false);
+    show("bubble", true);
+    set_text("bubble-text", call("chat_preview", shown));
+} end function update_bubble
+
+function fill_folders() -> void {
+    grove::Element: box = grove::get_by_id("folders");
+    clear(box);
+    auto: rows = call("folders", "").split("\n");
+    long int: n = 0l;
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        if (rows[i].empty()) then {
+            continue;
+        }
+        box.append_child(el("text", "", rows[i]));
+        n += 1l;
+    }
+    if (n == 0l) then {
+        box.append_child(el("text", "muted", "None yet. VRChat makes its OSC folder the first time OSC is turned on."));
+    }
+} end function fill_folders
+
+grove::get_by_id("connect").on("click", [](grove::Event&: e) -> void {
+    string: r = call("connect", "");
+    if (failed(r)) then {
+        grove::popup_warning("Couldn't connect", reason(r));
+    }
+    update_state();
+});
+
+grove::get_by_id("disconnect").on("click", [](grove::Event&: e) -> void {
+    call("disconnect", "");
+    update_state();
+});
+
+grove::get_by_id("av-reload").on("click", [](grove::Event&: e) -> void {
+    string: r = call("reload_avatar", "");
+    if (failed(r)) then {
+        grove::popup_info("Avatar", reason(r));
+    }
+    update_state();
+});
+
+grove::get_by_id("param-filter").on("key_down", [](grove::Event&: e) -> void {
+    param_filter = e.target().value_string();
+    build_params();
+});
+
+grove::get_by_id("param-filter").on("change", [](grove::Event&: e) -> void {
+    param_filter = e.target().value_string();
+    build_params();
+});
+
+grove::get_by_id("param-writable").on("change", [](grove::Event&: e) -> void {
+    param_writable_only = e.target().value_bool();
+    build_params();
+});
+
+grove::get_by_id("custom-send").on("click", [](grove::Event&: e) -> void {
+    string: name = grove::get_by_id("custom-name").value_string().trim();
+    string: type = grove::get_by_id("custom-type").value_string();
+    string: value = grove::get_by_id("custom-value").value_string();
+    string: r = call("set_param", tab3(name, type, value));
+    if (failed(r)) then {
+        grove::popup_warning("Couldn't set it", reason(r));
+    }
+});
+
+grove::get_by_id("chat-text").on("key_down", [](grove::Event&: e) -> void {
+    string: msg = e.target().value_string();
+    if (e.key() == "Enter") then {
+        send_chat(msg);
+        e.prevent_default();
+        return;
+    }
+    if (e.key() == "Escape") then {
+        compose_now = "";
+    } else if (e.key() == "Backspace") then {
+        compose_now = call("chat_drop_last", msg);
+    } else then {
+        compose_now = msg;
+    }
+    update_count(msg);
+    set_typing(true);
+    update_bubble();
+});
+
+grove::get_by_id("chat-text").on("text", [](grove::Event&: e) -> void {
+    compose_now = e.target().value_string() + e.input_text();
+    update_count(compose_now);
+    update_bubble();
+});
+
+grove::get_by_id("chat-text").on("blur", [](grove::Event&: e) -> void {
+    set_typing(false);
+    compose_now = e.target().value_string();
+    update_bubble();
+});
+
+grove::get_by_id("chat-send").on("click", [](grove::Event&: e) -> void {
+    send_chat(grove::get_by_id("chat-text").value_string());
+});
+
+grove::get_by_id("chat-clear").on("click", [](grove::Event&: e) -> void {
+    call("chatbox", tab2("", "0"));
+    typing_sent = false;
+    last_sent = "";
+    update_bubble();
+});
+
+grove::get_by_id("status-on").on("change", [](grove::Event&: e) -> void {
+    if (e.target().value_bool()) then {
+        call("set", tab2("status_enabled", "1"));
+    } else then {
+        call("set", tab2("status_enabled", "0"));
+    }
+    update_bubble();
+});
+
+grove::get_by_id("status-template").on("change", [](grove::Event&: e) -> void {
+    call("set", tab2("status_template", e.target().value_string()));
+    update_preview();
+});
+
+grove::get_by_id("status-template").on("input", [](grove::Event&: e) -> void {
+    call("set", tab2("status_template", e.target().value_string()));
+    update_preview();
+});
+
+grove::get_by_id("status-interval").on("change", [](grove::Event&: e) -> void {
+    string: r = call("set", tab2("status_interval", e.target().value_float().to_string()));
+    if (failed(r)) then {
+        grove::popup_warning("Status interval", reason(r));
+        load_settings();
+    }
+});
+
+grove::get_by_id("status-notify").on("change", [](grove::Event&: e) -> void {
+    if (e.target().value_bool()) then {
+        call("set", tab2("status_notify", "1"));
+    } else then {
+        call("set", tab2("status_notify", "0"));
+    }
+});
+
+grove::get_by_id("status-send").on("click", [](grove::Event&: e) -> void {
+    string: r = call("status_send", "");
+    if (failed(r)) then {
+        grove::popup_warning("Couldn't send", reason(r));
+    }
+});
+
+grove::get_by_id("mon-params").on("change", [](grove::Event&: e) -> void {
+    if (e.target().value_bool()) then {
+        call("set", tab2("log_parameters", "1"));
+    } else then {
+        call("set", tab2("log_parameters", "0"));
+    }
+});
+
+grove::get_by_id("mon-clear").on("click", [](grove::Event&: e) -> void {
+    call("log_clear", "");
+    grove::Element: box = grove::get_by_id("log");
+    clear(box);
+    log_lines = 0l;
+});
+
+grove::get_by_id("raw-send").on("click", [](grove::Event&: e) -> void {
+    string: r = call("send", grove::get_by_id("raw").value_string());
+    set_text("raw-error", reason(r));
+    show("raw-error", failed(r));
+});
+
+grove::get_by_id("raw").on("key_down", [](grove::Event&: e) -> void {
+    if (e.key() == "Enter") then {
+        string: r = call("send", e.target().value_string());
+        set_text("raw-error", reason(r));
+        show("raw-error", failed(r));
+    }
+});
+
+grove::get_by_id("set-apply").on("click", [](grove::Event&: e) -> void {
+    string: r = call("set", tab2("host", grove::get_by_id("set-host").value_string().trim()));
+    if (!failed(r)) then {
+        r = call("set", tab2("send_port", grove::get_by_id("set-send-port").value_integer().to_string()));
+    }
+    if (!failed(r)) then {
+        r = call("set", tab2("receive_port", grove::get_by_id("set-recv-port").value_integer().to_string()));
+    }
+    if (!failed(r)) then {
+        r = call("set", tab2("listen_host", grove::get_by_id("set-listen-host").value_string().trim()));
+    }
+    if (!failed(r)) then {
+        if (grove::get_by_id("set-oscquery").value_bool()) then {
+            r = call("set", tab2("oscquery", "1"));
+        } else then {
+            r = call("set", tab2("oscquery", "0"));
+        }
+    }
+    if (!failed(r)) then {
+        if (grove::get_by_id("set-auto").value_bool()) then {
+            r = call("set", tab2("auto_connect", "1"));
+        } else then {
+            r = call("set", tab2("auto_connect", "0"));
+        }
+    }
+    if (failed(r)) then {
+        set_text("set-result", reason(r));
+        return;
+    }
+    r = call("connect", "");
+    if (failed(r)) then {
+        set_text("set-result", "Saved, but " + reason(r));
+    } else then {
+        set_text("set-result", "Saved and connected");
+    }
+    update_state();
+});
+
+grove::get_by_id("set-folder").on("change", [](grove::Event&: e) -> void {
+    call("set", tab2("osc_folder", e.target().value_string()));
+    call("reload_avatar", "");
+    fill_folders();
+});
+
+grove::get_by_id("set-folder-clear").on("click", [](grove::Event&: e) -> void {
+    call("set", tab2("osc_folder", ""));
+    grove::get_by_id("set-folder").set_value_string("");
+    fill_folders();
+});
+
+grove::get_by_id("settings").on("page_show", [](grove::Event&: e) -> void {
+    fill_folders();
+});
+
+auto: placeholders = call("placeholders", "").split("\n");
+for (long int: i = 0l; i < placeholders.size(); i += 1l) {
+    if (placeholders[i].empty()) then {
+        continue;
+    }
+    grove::Element: chip = el("text", "chip", placeholders[i]);
+    grove::get_by_id("placeholders").append_child(chip);
+}
+
+grove::set_interval(200.0, []() -> void {
+    update_state();
+    update_params();
+    update_log();
+});
+
+grove::set_interval(1000.0, []() -> void {
+    update_system();
+    if (grove::get_by_id("chat").is_current()) then {
+        update_preview();
+        update_bubble();
+    }
+});
+
+set_text("version", "v" + call("version", ""));
+load_settings();
+update_state();
+update_system();
+update_preview();
+update_bubble();
+fill_folders();
+build_params();
