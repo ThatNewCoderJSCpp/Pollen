@@ -520,7 +520,9 @@ std::string Session::module_preview(const std::string& module, const std::string
     if (module == "units") values = all_module_values(m_settings.modules, in);
     else module_values(*def, m_settings.modules, in, values);
     add_modified_values(text, m_settings.modules, in, values);
-    return render_status(text, values);
+    const double interval = m_settings.status_interval < 2.0 ? 2.0 : m_settings.status_interval;
+    const double t = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+    return render_status_turn(text, static_cast<std::size_t>(t / interval), values);
 }
 
 std::string Session::module_status(const std::string& module) const {

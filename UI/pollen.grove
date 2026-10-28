@@ -143,7 +143,7 @@
                         <div class="grow"></div>
                         <input_bool id="status-on" switch>Send automatically</input_bool>
                     </row>
-                    <p class="hint">Pollen sends this to the chatbox on a timer. Put a line with only --- between messages to rotate through them. A line whose placeholders are all empty is left out, so a song line disappears when nothing is playing. Click a placeholder to add it, and open the Modules tab for more. Add to a placeholder after a colon to change it in just that spot: {ram_app:%}, {ram_app:MB}, {cpu_temp:F+C}, {cpu:.1}.</p>
+                    <p class="hint">Pollen sends this to the chatbox on a timer. Put a line with only --- between messages to rotate through whole messages. To rotate just part of it, put lines between [rotate] and [/rotate]: each send shows the next one while the lines around it stay the same (separate choices longer than a line with --, and use [rotate every 2] to change it every other send). Inside a line, [[CPU {cpu} || GPU {gpu}]] takes turns the same way. A line whose placeholders are all empty is left out, so a song line disappears when nothing is playing, and a rotating choice that would be empty is skipped. Click a placeholder to add it, and open the Modules tab for more. Add to a placeholder after a colon to change it in just that spot: {ram_app:%}, {ram_app:MB}, {cpu_temp:F+C}, {cpu:.1}.</p>
                     <input_code id="status-template" class="template" language="text" line-numbers="false" autocomplete="false"></input_code>
                     <div class="sub-title">Placeholders you can use</div>
                     <column id="placeholders" class="ph-list status-ph"></column>
@@ -153,6 +153,8 @@
                         <text class="muted">seconds</text>
                         <input_bool id="status-notify" switch>Play the sound each time</input_bool>
                         <div class="grow"></div>
+                        <button id="status-rotate-block" class="ghost">Add rotating lines</button>
+                        <button id="status-rotate-inline" class="ghost">Add rotating text</button>
                         <button id="status-send" class="ghost">Send one now</button>
                     </row>
                     <div class="sub-title">Preview</div>

@@ -17,6 +17,10 @@ std::string render_status(const std::string& page, const StatusValues& values, s
 
 std::vector<std::string> status_placeholders();
 
+std::string expand_rotations(const std::string& page, std::size_t turn, const StatusValues& values);
+std::string render_status_turn(const std::string& page, std::size_t turn, const StatusValues& values);
+std::string strip_rotation_markers(const std::string& text);
+
 class StatusRotation {
 public:
     void set_template(const std::string& text);
@@ -32,6 +36,7 @@ public:
 
 private:
     std::vector<std::string> m_pages;
+    std::vector<std::size_t> m_turns;
     std::size_t m_index = 0;
     bool m_sent = false;
     std::chrono::steady_clock::time_point m_last;

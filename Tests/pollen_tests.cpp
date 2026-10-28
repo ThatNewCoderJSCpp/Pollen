@@ -766,6 +766,46 @@ static void test_weather_parsing() {
     CHECK(also && !option_visible(ModuleOptions{}, *weather, *also));
 }
 
+static void test_partial_rotation() {
+    using namespace pollen;
+    StatusValues v{ { "time", "3:04 PM" }, { "cpu", "23%" }, { "gpu", "40%" }, { "ram", "38%" }, { "song", "" }, { "fps", "90" } };
+    const std::string tpl = "{time}\n[rotate]\nCPU {cpu}\nGPU {gpu}\nRAM {ram}\n[/rotate]\nbottom";
+    CHECK(render_status_turn(tpl, 0, v) == "3:04 PM\nCPU 23%\nbottom");
+    CHECK(render_status_turn(tpl, 1, v) == "3:04 PM\nGPU 40%\nbottom");
+    CHECK(render_status_turn(tpl, 2, v) == "3:04 PM\nRAM 38%\nbottom");
+    CHECK(render_status_turn(tpl, 3, v) == "3:04 PM\nCPU 23%\nbottom");
+
+    const std::string multi = "top\n[rotate every 2]\nCPU {cpu}\nGPU {gpu}\n--\n\xe2\x99\xaa {song}\n--\nRAM {ram}\n[/rotate]";
+    CHECK(render_status_turn(multi, 0, v) == "top\nCPU 23%\nGPU 40%");
+    CHECK(render_status_turn(multi, 1, v) == "top\nCPU 23%\nGPU 40%");
+    CHECK(render_status_turn(multi, 2, v) == "top\nRAM 38%");
+    CHECK(render_status_turn(multi, 4, v) == "top\nRAM 38%");
+    CHECK(render_status_turn(multi, 6, v) == "top\nCPU 23%\nGPU 40%");
+
+    const std::string inline_tpl = "{time} \xc2\xb7 [[CPU {cpu} || \xe2\x99\xaa {song} || GPU {gpu}]] \xc2\xb7 end";
+    CHECK(render_status_turn(inline_tpl, 0, v) == "3:04 PM \xc2\xb7 CPU 23% \xc2\xb7 end");
+    CHECK(render_status_turn(inline_tpl, 1, v) == "3:04 PM \xc2\xb7 GPU 40% \xc2\xb7 end");
+    CHECK(render_status_turn(inline_tpl, 2, v) == "3:04 PM \xc2\xb7 GPU 40% \xc2\xb7 end");
+    CHECK(render_status_turn("a [[x || y]] b [[1 || 2 || 3]]", 4, v) == "a x b 2");
+
+    CHECK(render_status_turn("[rotate]\n{song}\n[/rotate]\nkeep", 0, v) == "keep");
+    CHECK(render_status_turn("unclosed\n[rotate]\none\ntwo", 1, v) == "unclosed\ntwo");
+    CHECK(render_status_turn("[rotate every x]\nliteral", 0, v) == "[rotate every x]\nliteral");
+    CHECK(render_status_turn("no [[closing", 0, v) == "no [[closing");
+
+    StatusRotation r;
+    r.set_template("{time}\n[rotate]\nCPU {cpu}\nGPU {gpu}\n[/rotate]\n---\nonly {fps}");
+    const auto now = std::chrono::steady_clock::now();
+    CHECK(r.next(v, now) == "3:04 PM\nCPU 23%");
+    CHECK(r.next(v, now) == "only 90");
+    CHECK(r.next(v, now) == "3:04 PM\nGPU 40%");
+    CHECK(r.showing(v, now, 3.0, true) == "3:04 PM\nGPU 40%");
+    CHECK(r.next(v, now) == "only 90");
+    CHECK(r.next(v, now) == "3:04 PM\nCPU 23%");
+    r.reset();
+    CHECK(r.next(v, now) == "3:04 PM\nCPU 23%");
+}
+
 static void test_rotation_without_sending() {
     pollen::StatusRotation r;
     r.set_template("a\n---\nb\n---\nc");
@@ -1137,6 +1177,7 @@ int main() {
     test_modifiers();
     test_vrchat_log();
     test_friend_book();
+    test_partial_rotation();
     test_rotation_without_sending();
     test_weather_fetch();
     std::printf("%d passed, %d failed\n", g_pass, g_fail);

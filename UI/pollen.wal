@@ -1116,6 +1116,26 @@ grove::get_by_id("status-notify").on("change", [](grove::Event&: e) -> void {
     }
 });
 
+grove::get_by_id("status-rotate-block").on("click", [](grove::Event&: e) -> void {
+    grove::Element: t = grove::get_by_id("status-template");
+    string: value = t.value_string();
+    if (!value.empty() && !value.ends_with("\n")) then {
+        value = value + "\n";
+    }
+    value = value + "[rotate]\nCPU {cpu} \u{00B7} {cpu_temp}\nGPU {gpu} \u{00B7} {gpu_temp}\nRAM {ram_used} / {ram_total}\n[/rotate]";
+    t.set_value_string(value);
+    call("set", tab2("status_template", value));
+    update_preview();
+});
+
+grove::get_by_id("status-rotate-inline").on("click", [](grove::Event&: e) -> void {
+    grove::Element: t = grove::get_by_id("status-template");
+    string: value = t.value_string() + "[[CPU {cpu} || GPU {gpu} || RAM {ram}]]";
+    t.set_value_string(value);
+    call("set", tab2("status_template", value));
+    update_preview();
+});
+
 grove::get_by_id("status-send").on("click", [](grove::Event&: e) -> void {
     string: r = call("status_send", "");
     if (failed(r)) then {

@@ -5,6 +5,7 @@
 #include <grove/runtime/runtime.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -16,8 +17,10 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef POLLEN_VERSION_STRING
@@ -144,14 +147,37 @@ public:
         register_natives();
     }
 
+    ~App() {
+        m_beating = false;
+        if (m_heartbeat.joinable()) m_heartbeat.join();
+    }
+
+    App(const App&) = delete;
+    App& operator=(const App&) = delete;
+
     void install() {
-        m_session.start_vrchat(std::string("Pollen/") + POLLEN_VERSION_STRING + " https://github.com/ThatNewCoderJSCpp/pollen");
-        m_doc.events().set_interval(33.0, [this] { m_session.tick(); });
+        {
+            std::lock_guard<std::mutex> lock(m_lock);
+            m_session.start_vrchat(std::string("Pollen/") + POLLEN_VERSION_STRING + " https://github.com/ThatNewCoderJSCpp/pollen");
+        }
+        m_beating = true;
+        m_heartbeat = std::thread([this] {
+            while (m_beating.load()) {
+                {
+                    std::lock_guard<std::mutex> lock(m_lock);
+                    m_session.tick();
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(33));
+            }
+        });
     }
 
 private:
     void native(const std::string& name, std::function<std::string(const std::vector<std::string>&)> fn) {
-        grove::register_native(m_doc, "pollen." + name, std::move(fn));
+        grove::register_native(m_doc, "pollen." + name, [this, fn = std::move(fn)](const std::vector<std::string>& args) {
+            std::lock_guard<std::mutex> lock(m_lock);
+            return fn(args);
+        });
     }
 
     std::string state() {
@@ -716,6 +742,9 @@ private:
 
     grove::Document& m_doc;
     pollen::Session m_session;
+    std::mutex m_lock;
+    std::atomic<bool> m_beating{ false };
+    std::thread m_heartbeat;
 };
 
 int bundle_ui(const std::string& output, bool portable) {
