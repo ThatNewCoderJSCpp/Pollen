@@ -1,12 +1,17 @@
 #include <pollen/session.hpp>
 
 #include <grove/grove.hpp>
+#include <grove/native.hpp>
 #include <grove/runtime/runtime.hpp>
 
+#include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
+#include <map>
 #include <filesystem>
 #include <functional>
 #include <iostream>
@@ -77,6 +82,45 @@ std::string number(double v, int decimals) {
     return buf;
 }
 
+std::string clock_text(std::chrono::system_clock::time_point t) {
+    const std::time_t tt = std::chrono::system_clock::to_time_t(t);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &tt);
+#else
+    localtime_r(&tt, &tm);
+#endif
+    char buf[32];
+    int h = tm.tm_hour % 12;
+    if (h == 0) h = 12;
+    std::snprintf(buf, sizeof(buf), "%d:%02d %s", h, tm.tm_min, tm.tm_hour < 12 ? "AM" : "PM");
+    return buf;
+}
+
+std::string since_text(std::chrono::system_clock::time_point t) {
+    const double s = std::chrono::duration<double>(std::chrono::system_clock::now() - t).count();
+    if (s < 60) return "just now";
+    if (s < 3600) return std::to_string(static_cast<int>(s / 60)) + " min";
+    const int h = static_cast<int>(s / 3600);
+    const int m = static_cast<int>(s / 60) % 60;
+    return std::to_string(h) + " h " + std::to_string(m) + " min";
+}
+
+bool open_in_browser(const std::string& url) {
+    if (url.compare(0, 19, "https://vrchat.com/") != 0) return false;
+    for (char c : url) {
+        if (!std::isalnum(static_cast<unsigned char>(c)) && std::string(":/?&=._-%").find(c) == std::string::npos) return false;
+    }
+#if defined(_WIN32)
+    const std::string command = "start \"\" \"" + url + "\"";
+#elif defined(__APPLE__)
+    const std::string command = "open '" + url + "'";
+#else
+    const std::string command = "xdg-open '" + url + "' >/dev/null 2>&1 &";
+#endif
+    return std::system(command.c_str()) == 0;
+}
+
 std::string find_ui() {
     std::vector<fs::path> candidates;
     const std::string over = env("POLLEN_UI_DIR");
@@ -101,6 +145,7 @@ public:
     }
 
     void install() {
+        m_session.start_vrchat(std::string("Pollen/") + POLLEN_VERSION_STRING + " https://github.com/ThatNewCoderJSCpp/pollen");
         m_doc.events().set_interval(33.0, [this] { m_session.tick(); });
     }
 
@@ -225,7 +270,211 @@ private:
         return "ok";
     }
 
+    std::string account_line() {
+        const pollen::AccountSnapshot a = m_session.vrchat().account();
+        const char* state = "loggedout";
+        switch (a.state) {
+        case pollen::LoginState::LoggedOut: state = "loggedout"; break;
+        case pollen::LoginState::Working: state = "working"; break;
+        case pollen::LoginState::NeedsCode: state = "code"; break;
+        case pollen::LoginState::WaitingForApproval: state = "approve"; break;
+        case pollen::LoginState::LoggedIn: state = "loggedin"; break;
+        }
+        std::vector<std::string> f = { state, clean(a.message), clean(a.code_kind), clean(a.device_code), clean(a.device_url), clean(a.me.name), clean(a.me.status),
+            clean(pollen::status_label(a.me.status)), clean(a.me.status_text), a.pipeline ? "1" : "0", clean(a.action_note),
+            std::to_string(a.friends_revision), std::to_string(a.collection_revision), std::to_string(m_session.activity_seq()) };
+        std::string line;
+        for (std::size_t i = 0; i < f.size(); ++i) line += (i ? "\t" : "") + f[i];
+        return line;
+    }
+
+    std::string world_text() {
+        const pollen::WorldSnapshot w = m_session.world();
+        std::string out;
+        auto put = [&](const std::string& k, const std::string& v) { out += k + "\t" + clean(v) + "\n"; };
+        put("found", m_session.found_vrchat_log() ? "1" : "0");
+        put("file", m_session.vrchat_log_file());
+        put("in_world", w.in_world ? "1" : "0");
+        put("world", m_session.world_name());
+        put("type", w.info.valid ? pollen::access_label(w.info.access) : std::string());
+        put("region", w.info.valid ? pollen::region_label(w.info.region) : std::string());
+        put("instance", w.info.instance);
+        put("players", std::to_string(w.players.size()));
+        put("since", w.in_world ? clock_text(w.entered) + " (" + since_text(w.entered) + ")" : std::string());
+        put("location", w.location);
+        return out;
+    }
+
+    std::string friends_text(const std::string& filter, const std::string& search) {
+        std::vector<pollen::VrcUser> list = m_session.vrchat().friends();
+        const pollen::WorldSnapshot w = m_session.world();
+        std::map<std::string, bool> here;
+        for (const pollen::InstancePlayer& p : w.players) {
+            if (!p.id.empty()) here[p.id] = true;
+        }
+        auto rank = [&](const pollen::VrcUser& u) {
+            if (here.count(u.id)) return 0;
+            if (u.state == "online") return 1;
+            if (u.state == "active") return 2;
+            return 3;
+        };
+        std::sort(list.begin(), list.end(), [&](const pollen::VrcUser& a, const pollen::VrcUser& b) {
+            const int ra = rank(a), rb = rank(b);
+            if (ra != rb) return ra < rb;
+            std::string x = a.name, y = b.name;
+            for (char& c : x) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            for (char& c : y) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return x < y;
+        });
+        std::string needle = search;
+        for (char& c : needle) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        std::string out;
+        for (const pollen::VrcUser& u : list) {
+            const int r = rank(u);
+            if (filter == "online" && r > 1) continue;
+            if (filter == "web" && r != 2) continue;
+            if (filter == "offline" && r != 3) continue;
+            if (filter == "here" && r != 0) continue;
+            if (!needle.empty()) {
+                std::string n = u.name;
+                for (char& c : n) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (n.find(needle) == std::string::npos) continue;
+            }
+            std::string where;
+            std::string extra;
+            if (r == 0) where = "In your instance";
+            else if (r == 2) where = "On the VRChat website";
+            else if (r == 3) where = u.last_login.empty() ? std::string("Offline") : "Offline, last seen " + u.last_login.substr(0, 10);
+            else {
+                where = m_session.vrchat().describe_location(u.location);
+                const pollen::LocationInfo info = pollen::parse_location(u.location);
+                if (info.valid) m_session.vrchat().world_name(info.world_id);
+                where[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(where[0])));
+                if (info.special == "private" && !u.last_public_location.empty()) extra = "last seen in " + m_session.vrchat().describe_location(u.last_public_location);
+            }
+            if (r == 1 && u.location_since_known) where += " for " + since_text(u.location_since);
+            const std::string status = r == 3 ? std::string("offline") : u.status;
+            out += clean(u.id) + "\t" + clean(u.name) + "\t" + std::to_string(r) + "\t" + clean(status) + "\t" + clean(pollen::status_label(status)) + "\t" + clean(u.status_text) + "\t" + clean(where) + "\t" + clean(extra) + "\n";
+        }
+        return out;
+    }
+
+    void register_vrchat_natives() {
+        native("vrc_account", [this](const std::vector<std::string>&) { return account_line(); });
+        native("vrc_login", [this](const std::vector<std::string>& args) {
+            const auto f = fields_of(args);
+            std::string password = arg(f, 1);
+            for (std::size_t i = 2; i < f.size(); ++i) password += "\t" + f[i];
+            if (arg(f, 0).empty() || password.empty()) return std::string("error\ttype your username and password");
+            m_session.vrchat().login(arg(f, 0), password);
+            return std::string("ok");
+        });
+        native("vrc_verify", [this](const std::vector<std::string>& args) {
+            m_session.vrchat().verify(arg(args, 0));
+            return std::string("ok");
+        });
+        native("vrc_login_code", [this](const std::vector<std::string>&) {
+            m_session.vrchat().login_with_code();
+            return std::string("ok");
+        });
+        native("vrc_cancel", [this](const std::vector<std::string>&) {
+            m_session.vrchat().cancel_login();
+            return std::string("ok");
+        });
+        native("vrc_logout", [this](const std::vector<std::string>&) {
+            m_session.vrchat().logout();
+            return std::string("ok");
+        });
+        native("vrc_refresh", [this](const std::vector<std::string>&) {
+            m_session.vrchat().refresh_friends();
+            return std::string("ok");
+        });
+        native("vrc_open_login", [this](const std::vector<std::string>&) {
+            const std::string url = m_session.vrchat().account().device_url;
+            if (!open_in_browser(url)) return std::string("error\tcouldn't open a browser; copy the link instead");
+            return std::string("ok");
+        });
+        native("vrc_copy_login", [this](const std::vector<std::string>&) {
+            const std::string url = m_session.vrchat().account().device_url;
+            if (url.empty() || !grove::set_clipboard_text(m_doc, url)) return std::string("error\tcouldn't copy the link");
+            return std::string("ok");
+        });
+        native("vrc_world", [this](const std::vector<std::string>&) { return world_text(); });
+        native("vrc_players", [this](const std::vector<std::string>&) {
+            std::string out;
+            for (const pollen::InstancePlayer& p : m_session.world().players) {
+                out += clean(p.name) + "\t" + clean(p.id) + "\t" + (m_session.vrchat().is_friend(p.id) ? "1" : "0") + "\t" + clock_text(p.joined) + "\n";
+            }
+            return out;
+        });
+        native("vrc_friends", [this](const std::vector<std::string>& args) {
+            const auto f = fields_of(args);
+            return friends_text(arg(f, 0), arg(f, 1));
+        });
+        native("vrc_activity", [this](const std::vector<std::string>& args) {
+            const auto f = fields_of(args);
+            const std::uint64_t since = std::strtoull(arg(f, 0).c_str(), nullptr, 10);
+            const std::string flags = arg(f, 1) + "11111";
+            const bool friends_only = flags[0] == '1';
+            std::string out;
+            for (const pollen::Activity& a : m_session.activity_since(since)) {
+                const std::string& k = a.kind;
+                bool show = true;
+                if ((k == "join" || k == "leave") && (flags[1] != '1' || (friends_only && !a.friend_related))) show = false;
+                if ((k == "online" || k == "offline" || k == "active") && flags[2] != '1') show = false;
+                if (k == "location" && flags[3] != '1') show = false;
+                if ((k == "status" || k == "you") && flags[4] != '1') show = false;
+                out += std::to_string(a.seq) + "\t" + clock_text(a.time) + "\t" + k + "\t" + (show ? "1" : "0") + "\t" + clean(a.text) + "\n";
+            }
+            return out;
+        });
+        native("vrc_activity_clear", [this](const std::vector<std::string>&) {
+            m_session.clear_activity();
+            return std::string("ok");
+        });
+        native("vrc_load", [this](const std::vector<std::string>& args) {
+            m_session.vrchat().load_collection(arg(args, 0));
+            return std::string("ok");
+        });
+        native("vrc_collection", [this](const std::vector<std::string>& args) {
+            const auto fields = fields_of(args);
+            const std::string kind = arg(fields, 0);
+            std::string needle = arg(fields, 1);
+            const bool show_archived = arg(fields, 2) == "1";
+            for (char& c : needle) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            const std::string type = kind == "avatars" ? "avatar" : (kind == "worlds" ? "world" : "friend");
+            std::map<std::string, std::string> names;
+            for (const pollen::FavoriteGroup& g : m_session.vrchat().favorite_groups(type)) names[g.name] = g.display_name.empty() ? g.name : g.display_name;
+            std::string out;
+            for (const pollen::CollectionRow& r : m_session.vrchat().collection(kind)) {
+                if (r.archived && !show_archived) continue;
+                if (!needle.empty()) {
+                    std::string hay = r.name + " " + r.detail;
+                    for (char& c : hay) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    if (hay.find(needle) == std::string::npos) continue;
+                }
+                const auto n = names.find(r.group);
+                const std::string group = n == names.end() ? r.group : n->second;
+                out += clean(r.id) + "\t" + clean(r.target_id) + "\t" + clean(r.name) + "\t" + clean(r.detail) + "\t" + clean(group) + "\t" + clean(r.group) + "\t" + (r.archived ? "1" : "0") + "\t" + (r.custom ? "1" : "0") + "\n";
+            }
+            return out;
+        });
+        native("vrc_collection_status", [this](const std::vector<std::string>& args) { return m_session.vrchat().collection_status(arg(args, 0)); });
+        native("vrc_groups", [this](const std::vector<std::string>& args) {
+            std::string out;
+            for (const pollen::FavoriteGroup& g : m_session.vrchat().favorite_groups(arg(args, 0))) out += (out.empty() ? "" : "|") + g.name + "=" + (g.display_name.empty() ? g.name : g.display_name);
+            return clean(out);
+        });
+        native("vrc_act", [this](const std::vector<std::string>& args) {
+            std::vector<std::string> f = fields_of(args);
+            if (arg(f, 0) == "invite") f = { "invite", arg(f, 1), m_session.world().location };
+            m_session.vrchat().act(f);
+            return std::string("ok");
+        });
+    }
+
     void register_natives() {
+        register_vrchat_natives();
         native("version", [](const std::vector<std::string>&) { return std::string(POLLEN_VERSION_STRING); });
         native("state", [this](const std::vector<std::string>&) { return state(); });
         native("system", [this](const std::vector<std::string>&) { return system(); });
@@ -365,6 +614,33 @@ private:
                 out += p.name + "\t" + clean(p.description) + "\t" + (on ? "1" : "0") + "\t" + clean(pollen::requirement_text(*m, p)) + "\n";
             }
             return out;
+        });
+        native("placeholder_options", [this](const std::vector<std::string>& args) {
+            const auto f = fields_of(args);
+            const pollen::ModuleDef* m = pollen::find_module(arg(f, 0));
+            const pollen::PlaceholderDef* p = m ? pollen::find_placeholder(*m, arg(f, 1)) : nullptr;
+            if (!p) return std::string();
+            const pollen::ModuleOptions& opts = m_session.settings().modules;
+            std::string out;
+            for (const pollen::OptionDef& o : pollen::visible_placeholder_settings(opts, *m, *p)) {
+                const std::string kind = o.kind == pollen::OptionKind::Bool ? "bool" : "choice";
+                std::string value = pollen::option_value(opts, m->id, pollen::placeholder_key(p->name, o.id));
+                if (value.empty()) value = o.fallback;
+                std::string choices;
+                for (const auto& c : o.choices) {
+                    std::string label = c.second;
+                    if (c.first == "default") label = "Default (" + pollen::choice_label(o, pollen::placeholder_default(opts, *m, *p, o.id)) + ")";
+                    choices += (choices.empty() ? "" : "|") + c.first + "=" + label;
+                }
+                out += kind + "\t" + o.id + "\t" + clean(o.label) + "\t" + clean(value) + "\t" + clean(o.hint) + "\t" + clean(choices) + "\n";
+            }
+            return out;
+        });
+        native("placeholder_set", [this](const std::vector<std::string>& args) {
+            const auto f = fields_of(args);
+            std::string why;
+            if (!m_session.set_module_option(arg(f, 0), pollen::placeholder_key(arg(f, 1), arg(f, 2)), arg(f, 3), &why)) return "error\t" + clean(why);
+            return std::string("ok");
         });
         native("module_title", [](const std::vector<std::string>& args) {
             const pollen::ModuleDef* m = pollen::find_module(arg(args, 0));

@@ -199,7 +199,82 @@ Session::~Session() {
     m_weather.stop();
     m_sensors.stop();
     m_media.stop();
+    m_api.stop();
     m_connection.stop();
+}
+
+void Session::start_vrchat(const std::string& user_agent) {
+    std::vector<fs::path> extra;
+    if (!m_settings.osc_folder.empty()) extra.emplace_back(m_settings.osc_folder);
+    m_vrclog.set_folders(vrchat_log_folders(extra));
+    m_api.start(m_settings_path.parent_path(), user_agent);
+}
+
+std::string Session::world_name() {
+    const WorldSnapshot& w = m_vrclog.world();
+    if (!w.world_name.empty()) return w.world_name;
+    if (w.info.valid) return m_api.world_name(w.info.world_id);
+    return std::string();
+}
+
+void Session::add_activity(const std::string& kind, const std::string& text, const std::string& user_id, bool friend_related, std::chrono::system_clock::time_point time) {
+    Activity a;
+    a.seq = ++m_activity_seq;
+    a.time = time;
+    a.kind = kind;
+    a.text = text;
+    a.user_id = user_id;
+    a.friend_related = friend_related;
+    m_activity.push_back(std::move(a));
+    while (m_activity.size() > 1000) m_activity.pop_front();
+}
+
+std::vector<Activity> Session::activity_since(std::uint64_t seq, std::size_t max) const {
+    std::vector<Activity> out;
+    for (const Activity& a : m_activity) {
+        if (a.seq > seq) out.push_back(a);
+    }
+    if (out.size() > max) out.erase(out.begin(), out.end() - static_cast<std::ptrdiff_t>(max));
+    return out;
+}
+
+void Session::clear_activity() {
+    m_activity.clear();
+}
+
+void Session::poll_vrchat() {
+    for (const LogEvent& e : m_vrclog.poll()) {
+        const WorldSnapshot& w = m_vrclog.world();
+        switch (e.kind) {
+        case LogKind::Entering: {
+            const std::string type = w.info.valid ? " (" + access_label(w.info.access) + ", " + region_label(w.info.region) + ")" : std::string();
+            add_activity("world", "You joined " + e.text + type, std::string(), false, e.time);
+            break;
+        }
+        case LogKind::PlayerJoined: {
+            const bool friend_related = !e.user_id.empty() && m_api.is_friend(e.user_id);
+            m_last_joined = e.text;
+            add_activity("join", (friend_related ? "Your friend " : std::string()) + e.text + " joined your instance", e.user_id, friend_related, e.time);
+            break;
+        }
+        case LogKind::PlayerLeft: {
+            const bool friend_related = !e.user_id.empty() && m_api.is_friend(e.user_id);
+            m_last_left = e.text;
+            add_activity("leave", (friend_related ? "Your friend " : std::string()) + e.text + " left your instance", e.user_id, friend_related, e.time);
+            break;
+        }
+        case LogKind::LeftRoom:
+            add_activity("world", "You left the world", std::string(), false, e.time);
+            break;
+        case LogKind::Joining:
+            break;
+        }
+    }
+    for (const SocialEvent& e : m_api.take_events()) {
+        const bool friend_related = e.kind != "you";
+        if (friend_related && e.kind != "request" && e.kind != "invite") m_friend_news = e.text;
+        add_activity(e.kind, e.text, e.user_id, friend_related, e.time);
+    }
 }
 
 bool Session::save_settings(std::string* error) {
@@ -314,6 +389,10 @@ void Session::tick() {
         m_stats.update();
         m_last_stats = now;
     }
+    if (std::chrono::duration<double>(now - m_last_vrchat_poll).count() >= 1.0) {
+        m_last_vrchat_poll = now;
+        poll_vrchat();
+    }
     const bool hearing = m_connection.hearing_vrchat();
     if (hearing && !m_heard) m_heard_since = now;
     m_heard = hearing;
@@ -405,6 +484,19 @@ ModuleInputs Session::module_inputs() const {
     in.connected_seconds = connected_seconds();
     in.app_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_started).count();
     in.now = std::chrono::system_clock::now();
+    in.world = m_vrclog.world();
+    in.account = m_api.account();
+    in.last_joined = m_last_joined;
+    in.last_left = m_last_left;
+    in.friend_news = m_friend_news;
+    for (const VrcUser& f : m_api.friends()) {
+        ++in.friends_total;
+        if (f.state == "online") ++in.friends_online;
+        else if (f.state == "active") ++in.friends_web;
+    }
+    for (const InstancePlayer& p : in.world.players) {
+        if (!p.id.empty() && m_api.is_friend(p.id)) in.friends_here.push_back(p.name);
+    }
     return in;
 }
 
@@ -418,6 +510,16 @@ std::string Session::module_preview(const std::string& module, const std::string
 }
 
 std::string Session::module_status(const std::string& module) const {
+    if (module == "world") {
+        if (!m_vrclog.found()) return "Pollen hasn't found VRChat's log yet. It looks next to VRChat's OSC folder, so set that folder in Settings if VRChat is somewhere unusual";
+        if (!m_vrclog.world().in_world) return "Not in a world right now (reading " + m_vrclog.file().filename().string() + ")";
+        return "Reading " + m_vrclog.file().filename().string();
+    }
+    if (module == "friends") {
+        const AccountSnapshot a = m_api.account();
+        if (a.state != LoginState::LoggedIn) return "Log in to VRChat under Settings to use this module";
+        return "Logged in as " + a.me.name + (a.pipeline ? ", getting live updates" : ", waiting for live updates");
+    }
     if (module == "weather") {
         const WeatherSnapshot w = m_weather.snapshot();
         if (w.ok) return "Weather for " + w.place;

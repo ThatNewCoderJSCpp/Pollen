@@ -53,28 +53,79 @@ OptionDef number(const std::string& id, const std::string& label, OptionKind kin
     return o;
 }
 
+PlaceholderDef ph(const std::string& name, const std::string& description, const std::string& needs, const std::string& units = std::string(), bool percent = false) {
+    PlaceholderDef p;
+    p.name = name;
+    p.description = description;
+    p.needs = needs;
+    p.units = units;
+    p.percent = percent;
+    return p;
+}
+
 OptionDef when(OptionDef o, const std::string& condition) {
     o.when = condition;
     return o;
 }
 
+using Choices = std::vector<std::pair<std::string, std::string>>;
+
+const Choices& byte_units() {
+    static const Choices c = { { "auto", "Automatic" }, { "B", "B" }, { "KB", "KB" }, { "MB", "MB" }, { "GB", "GB" }, { "TB", "TB" } };
+    return c;
+}
+
+const Choices& temp_units() {
+    static const Choices c = { { "C", "\xc2\xb0" "C" }, { "F", "\xc2\xb0" "F" }, { "K", "K" } };
+    return c;
+}
+
+const Choices& speed_units() {
+    static const Choices c = { { "kmh", "km/h" }, { "mph", "mph" }, { "ms", "m/s" }, { "kn", "knots" }, { "fts", "ft/s" } };
+    return c;
+}
+
+const Choices& clock_units() {
+    static const Choices c = { { "auto", "Automatic" }, { "GHz", "GHz" }, { "MHz", "MHz" } };
+    return c;
+}
+
+const Choices& offset_precisions() {
+    static const Choices c = { { "auto", "What's needed" }, { "hours", "Hours (-5)" }, { "minutes", "Minutes (-5:00)" }, { "seconds", "Seconds (-5:00:00)" } };
+    return c;
+}
+
+Choices with_none(const Choices& c) {
+    Choices out = { { "none", "Nothing else" } };
+    out.insert(out.end(), c.begin(), c.end());
+    return out;
+}
+
+Choices with_default(const Choices& c) {
+    Choices out = { { "default", "Module default" } };
+    out.insert(out.end(), c.begin(), c.end());
+    return out;
+}
+
 std::vector<ModuleDef> build_defs() {
     std::vector<ModuleDef> d;
-    const std::vector<std::pair<std::string, std::string>> clock_units = { { "auto", "Automatic" }, { "GHz", "GHz" }, { "MHz", "MHz" } };
 
     {
         ModuleDef m;
         m.id = "units";
         m.title = "Units";
         m.icon = "\xe2\x9a\x99";
-        m.description = "How sizes, percentages and temperatures are written, for every module";
+        m.description = "The default way sizes, percentages and temperatures are written in every module. Each placeholder can pick its own unit, and whether it's a percentage, in its own module";
         m.options = {
-            choice("bytes_unit", "Sizes in", "auto", { { "auto", "Automatic" }, { "B", "B" }, { "KB", "KB" }, { "MB", "MB" }, { "GB", "GB" }, { "TB", "TB" } }),
+            choice("bytes_unit", "Sizes in (default)", "auto", byte_units()),
             choice("bytes_decimals", "Decimals for sizes", "1", { { "0", "0" }, { "1", "1" }, { "2", "2" } }),
             toggle("bytes_label", "Write the unit after sizes", true, "Turn off to write it yourself, like {ram_used}/{ram_total} GB"),
             choice("percent_decimals", "Decimals for percentages", "0", { { "0", "0" }, { "1", "1" }, { "2", "2" } }),
-            choice("temp_unit", "Temperatures in", "C", { { "C", "\xc2\xb0" "C" }, { "F", "\xc2\xb0" "F" }, { "K", "K" } }),
+            choice("temp_unit", "Temperatures in (default)", "C", temp_units()),
             toggle("temp_label", "Write the unit after temperatures", true),
+            choice("temp_also", "Also show temperatures in (default)", "none", with_none(temp_units()), "Shows both, like 12\xc2\xb0" "C (54\xc2\xb0" "F)"),
+            choice("temp_decimals", "Decimals for temperatures", "0", { { "0", "0" }, { "1", "1" }, { "2", "2" } }),
+            choice("both_style", "Show two units as", "paren", { { "paren", "12\xc2\xb0" "C (54\xc2\xb0" "F)" }, { "slash", "12\xc2\xb0" "C / 54\xc2\xb0" "F" }, { "space", "12\xc2\xb0" "C 54\xc2\xb0" "F" } }, "Used when temperatures or wind have a second unit"),
             text("unknown", "Show this when a reading isn't available", "", "Empty leaves the value blank, and a line whose values are all blank is left out"),
         };
         m.example = "{ram_used} \xc2\xb7 {cpu_temp}";
@@ -88,18 +139,18 @@ std::vector<ModuleDef> build_defs() {
         m.description = "Processor use, clock speed, name and temperature";
         m.options = {
             toggle("clock", "Clock speed", true),
-            when(choice("clock_unit", "Clock speed in", "auto", clock_units), "clock=1"),
+            when(choice("clock_unit", "Clock speed in (default)", "auto", clock_units()), "clock=1"),
             toggle("name", "Name", true),
             when(text("custom_name", "Custom name", "", "Leave empty to use the detected name"), "name=1"),
             toggle("temp", "Temperature", true),
             toggle("threads", "Thread count", false),
         };
         m.placeholders = {
-            { "cpu", "how busy the CPU is", "" },
-            { "cpu_clock", "current clock speed", "clock" },
-            { "cpu_name", "the CPU's name", "name" },
-            { "cpu_temp", "CPU temperature", "temp" },
-            { "cpu_threads", "number of threads", "threads" },
+            ph("cpu", "CPU load: how busy the processor is right now, as a percentage", ""),
+            ph("cpu_clock", "the processor's current clock speed", "clock", "clock"),
+            ph("cpu_name", "the processor's name", "name"),
+            ph("cpu_temp", "the processor's temperature", "temp", "temp"),
+            ph("cpu_threads", "how many threads the processor has", "threads"),
         };
         m.example = "CPU {cpu} \xc2\xb7 {cpu_clock} \xc2\xb7 {cpu_temp}";
         d.push_back(m);
@@ -109,31 +160,30 @@ std::vector<ModuleDef> build_defs() {
         m.id = "gpu";
         m.title = "GPU";
         m.icon = "\xe2\x96\xa6";
-        m.description = "Graphics card use, name, temperature, clock and memory";
+        m.description = "Graphics card load (how busy it is), name, temperature, clock, and its video memory (VRAM) in GB or as a percentage";
         m.options = {
             toggle("name", "Name", true),
             when(text("custom_name", "Custom name", "", "Leave empty to use the detected name"), "name=1"),
             toggle("temp", "Temperature", true),
             toggle("clock", "Clock speed", false),
-            when(choice("clock_unit", "Clock speed in", "auto", clock_units), "clock=1"),
-            toggle("memory", "Memory used and total", true),
-            toggle("free", "Memory free", false),
-            toggle("app", "Memory Pollen uses", false),
-            toggle("vrchat", "Memory VRChat uses", false),
-            toggle("percent", "Show memory amounts as percentages", false, "Used, free, Pollen and VRChat become a share of the total"),
+            when(choice("clock_unit", "Clock speed in (default)", "auto", clock_units()), "clock=1"),
+            toggle("memory", "Video memory used and total", true),
+            toggle("free", "Video memory free", false),
+            toggle("app", "Video memory Pollen uses", false),
+            toggle("vrchat", "Video memory VRChat uses", false),
         };
         m.placeholders = {
-            { "gpu", "how busy the GPU is", "" },
-            { "gpu_name", "the GPU's name", "name" },
-            { "gpu_temp", "GPU temperature", "temp" },
-            { "gpu_clock", "current clock speed", "clock" },
-            { "gpu_used", "video memory the whole computer uses", "memory" },
-            { "gpu_total", "video memory on the card", "memory" },
-            { "gpu_free", "video memory left", "free" },
-            { "gpu_app", "video memory Pollen uses", "app" },
-            { "gpu_vrchat", "video memory VRChat uses", "vrchat" },
+            ph("gpu", "GPU load: how busy the graphics card is right now, as a percentage. This is not memory; use {gpu_used} for that", ""),
+            ph("gpu_name", "the graphics card's name", "name"),
+            ph("gpu_temp", "the graphics card's temperature", "temp", "temp"),
+            ph("gpu_clock", "the graphics card's current clock speed", "clock", "clock"),
+            { "gpu_used", "video memory (VRAM) in use by everything on the computer, like 3.2 GB", "memory", "bytes", true },
+            ph("gpu_total", "video memory (VRAM) the card has, like 16.0 GB", "memory", "bytes"),
+            { "gpu_free", "video memory (VRAM) still free, like 12.8 GB", "free", "bytes", true },
+            { "gpu_app", "video memory (VRAM) Pollen uses", "app", "bytes", true },
+            { "gpu_vrchat", "video memory (VRAM) VRChat uses", "vrchat", "bytes", true },
         };
-        m.example = "GPU {gpu} \xc2\xb7 {gpu_temp}\n{gpu_used} / {gpu_total}";
+        m.example = "GPU {gpu} \xc2\xb7 {gpu_temp}\nVRAM {gpu_used} / {gpu_total}";
         d.push_back(m);
     }
     {
@@ -146,15 +196,14 @@ std::vector<ModuleDef> build_defs() {
             toggle("free", "Memory free", false),
             toggle("app", "Memory Pollen uses", false),
             toggle("vrchat", "Memory VRChat uses", false),
-            toggle("percent", "Show amounts as percentages", false, "Used, free, Pollen and VRChat become a share of the total"),
         };
         m.placeholders = {
-            { "ram", "share of memory in use", "" },
-            { "ram_used", "memory the whole computer uses", "" },
-            { "ram_total", "memory installed", "" },
-            { "ram_free", "memory left", "free" },
-            { "ram_app", "memory Pollen uses", "app" },
-            { "ram_vrchat", "memory VRChat uses", "vrchat" },
+            ph("ram", "share of memory (RAM) in use, as a percentage. {ram_used} is the same thing in GB", ""),
+            { "ram_used", "memory (RAM) in use by everything on the computer", "", "bytes", true },
+            ph("ram_total", "memory (RAM) installed", "", "bytes"),
+            { "ram_free", "memory (RAM) still free", "free", "bytes", true },
+            { "ram_app", "memory (RAM) Pollen uses", "app", "bytes", true },
+            { "ram_vrchat", "memory (RAM) VRChat uses", "vrchat", "bytes", true },
         };
         m.example = "RAM {ram_used} / {ram_total}";
         d.push_back(m);
@@ -166,18 +215,17 @@ std::vector<ModuleDef> build_defs() {
         m.icon = "\xe2\x96\xa5";
         m.description = "Video memory used by the computer, by Pollen and by VRChat";
         m.options = {
-            toggle("free", "Memory free", false),
-            toggle("app", "Memory Pollen uses", false),
-            toggle("vrchat", "Memory VRChat uses", false),
-            toggle("percent", "Show amounts as percentages", false, "Used, free, Pollen and VRChat become a share of the total"),
+            toggle("free", "Video memory free", false),
+            toggle("app", "Video memory Pollen uses", false),
+            toggle("vrchat", "Video memory VRChat uses", false),
         };
         m.placeholders = {
-            { "vram", "share of video memory in use", "" },
-            { "vram_used", "video memory the whole computer uses", "" },
-            { "vram_total", "video memory on the card", "" },
-            { "vram_free", "video memory left", "free" },
-            { "vram_app", "video memory Pollen uses", "app" },
-            { "vram_vrchat", "video memory VRChat uses", "vrchat" },
+            ph("vram", "share of video memory (VRAM) in use, as a percentage. {vram_used} is the same thing in GB", ""),
+            { "vram_used", "video memory (VRAM) in use by everything on the computer. Same as {gpu_used}", "", "bytes", true },
+            ph("vram_total", "video memory (VRAM) the card has", "", "bytes"),
+            { "vram_free", "video memory (VRAM) still free", "free", "bytes", true },
+            { "vram_app", "video memory (VRAM) Pollen uses", "app", "bytes", true },
+            { "vram_vrchat", "video memory (VRAM) VRChat uses", "vrchat", "bytes", true },
         };
         m.example = "VRAM {vram_used} / {vram_total}";
         d.push_back(m);
@@ -196,13 +244,13 @@ std::vector<ModuleDef> build_defs() {
             toggle("app", "Time Pollen has been open", false),
         };
         m.placeholders = {
-            { "uptime", "how long the computer has been on", "" },
-            { "uptime_days", "days of that", "days" },
-            { "uptime_hours", "hours of that", "" },
-            { "uptime_minutes", "minutes of that", "" },
-            { "uptime_seconds", "seconds of that", "seconds" },
-            { "connected", "how long VRChat has been talking to Pollen", "connected" },
-            { "app_uptime", "how long Pollen has been open", "app" },
+            ph("uptime", "how long the computer has been on", ""),
+            ph("uptime_days", "days of that", "days"),
+            ph("uptime_hours", "hours of that", ""),
+            ph("uptime_minutes", "minutes of that", ""),
+            ph("uptime_seconds", "seconds of that", "seconds"),
+            ph("connected", "how long VRChat has been talking to Pollen", "connected"),
+            ph("app_uptime", "how long Pollen has been open", "app"),
         };
         m.example = "Up {uptime}\nIn VRChat for {connected}";
         d.push_back(m);
@@ -212,7 +260,7 @@ std::vector<ModuleDef> build_defs() {
         m.id = "time";
         m.title = "Time";
         m.icon = "\xf0\x9f\x95\x92";
-        m.description = "The time here, and in UTC, GMT and TAI";
+        m.description = "The time here, in UTC, GMT and TAI, and how far the time here is from each";
         m.options = {
             toggle("hour24", "24-hour clock", false),
             toggle("seconds", "Seconds", false),
@@ -222,17 +270,23 @@ std::vector<ModuleDef> build_defs() {
             toggle("tai", "TAI (atomic time)", false),
             when(number("tai_offset", "TAI is ahead of UTC by (seconds)", OptionKind::Integer, "37", 0, 100, "37 since 2017; change it if a leap second is ever added"), "tai=1"),
             toggle("zone", "Time zone name", false),
+            toggle("offset", "Offset from UTC, GMT and TAI", false, "How far the time here is ahead of or behind each, like UTC-5 or UTC+5:30"),
+            when(choice("offset_precision", "Offsets show (default)", "auto", offset_precisions(), "\"What's needed\" writes -5, +5:30 or -5:00:37; \"Hours\" rounds to the nearest hour"), "offset=1"),
+            when(choice("offset_style", "Write offsets as", "named", { { "named", "UTC-5" }, { "bare", "-5" }, { "padded", "-05 (two-digit hour)" }, { "named_padded", "UTC-05 (two-digit hour)" } }), "offset=1"),
         };
         m.placeholders = {
-            { "time", "the time here", "" },
-            { "hour", "the hour", "" },
-            { "minute", "the minute", "" },
-            { "second", "the second", "seconds" },
-            { "ampm", "AM or PM", "!hour24" },
-            { "zone", "the time zone's short name", "zone" },
-            { "utc", "the time in UTC", "utc" },
-            { "gmt", "the time in GMT", "gmt" },
-            { "tai", "the time in TAI", "tai" },
+            ph("time", "the time here", ""),
+            ph("hour", "the hour", ""),
+            ph("minute", "the minute", ""),
+            ph("second", "the second", "seconds"),
+            ph("ampm", "AM or PM", "!hour24"),
+            ph("zone", "the time zone's short name", "zone"),
+            ph("utc", "the time in UTC", "utc"),
+            ph("gmt", "the time in GMT", "gmt"),
+            ph("tai", "the time in TAI", "tai"),
+            ph("utc_offset", "how far the time here is from UTC, like UTC-5", "offset", "offset"),
+            ph("gmt_offset", "how far the time here is from GMT, like GMT-5", "offset", "offset"),
+            ph("tai_offset", "how far the time here is from TAI, which is ahead of UTC by the leap seconds, like TAI-5:00:37", "offset", "offset"),
         };
         m.example = "{time}";
         d.push_back(m);
@@ -250,12 +304,12 @@ std::vector<ModuleDef> build_defs() {
             toggle("day_of_year", "Day of the year", false),
         };
         m.placeholders = {
-            { "date", "today's date", "" },
-            { "weekday", "the day of the week", "" },
-            { "day", "the day of the month", "" },
-            { "month", "the month", "" },
-            { "year", "the year", "" },
-            { "day_of_year", "the day of the year", "day_of_year" },
+            ph("date", "today's date", ""),
+            ph("weekday", "the day of the week", ""),
+            ph("day", "the day of the month", ""),
+            ph("month", "the month", ""),
+            ph("year", "the year", ""),
+            ph("day_of_year", "the day of the year", "day_of_year"),
         };
         m.example = "{weekday}, {date}";
         d.push_back(m);
@@ -272,13 +326,13 @@ std::vector<ModuleDef> build_defs() {
             toggle("progress", "Position and length", false),
         };
         m.placeholders = {
-            { "song", "artist - title", "" },
-            { "artist", "the artist", "" },
-            { "title", "the title", "" },
-            { "media", "a play or pause sign and the song", "" },
-            { "player", "the app playing it", "player" },
-            { "position", "how far into the song", "progress" },
-            { "length", "how long the song is", "progress" },
+            ph("song", "artist - title", ""),
+            ph("artist", "the artist", ""),
+            ph("title", "the title", ""),
+            ph("media", "a play or pause sign and the song", ""),
+            ph("player", "the app playing it", "player"),
+            ph("position", "how far into the song", "progress"),
+            ph("length", "how long the song is", "progress"),
         };
         m.example = "\xe2\x99\xaa {song}";
         d.push_back(m);
@@ -294,23 +348,81 @@ std::vector<ModuleDef> build_defs() {
             when(text("city", "City", "", "Add a state or country after a comma if the name is common, like Springfield, Illinois"), "mode=city"),
             when(number("latitude", "Latitude", OptionKind::Float, "0", -90, 90), "mode=coordinates"),
             when(number("longitude", "Longitude", OptionKind::Float, "0", -180, 180), "mode=coordinates"),
-            choice("wind_unit", "Wind in", "kmh", { { "kmh", "km/h" }, { "mph", "mph" }, { "ms", "m/s" }, { "kn", "knots" } }),
+            choice("wind_unit", "Wind in (default)", "kmh", speed_units()),
             choice("refresh", "Check every", "15", { { "10", "10 minutes" }, { "15", "15 minutes" }, { "30", "30 minutes" }, { "60", "hour" } }),
             toggle("feels", "Feels like", false),
             toggle("humidity", "Humidity", false),
             toggle("wind", "Wind", false),
+            when(choice("wind_also", "Also show wind in (default)", "none", with_none(speed_units()), "Shows both, like 18 km/h (11 mph)"), "wind=1"),
+            when(choice("wind_decimals", "Decimals for wind", "0", { { "0", "0" }, { "1", "1" }, { "2", "2" } }), "wind=1"),
             toggle("place", "Place name", false),
         };
         m.placeholders = {
-            { "weather_temp", "the temperature", "" },
-            { "weather_condition", "clear, rain, snow and so on", "" },
-            { "weather_icon", "a weather emoji", "" },
-            { "weather_feels", "what the temperature feels like", "feels" },
-            { "weather_humidity", "relative humidity", "humidity" },
-            { "weather_wind", "wind speed", "wind" },
-            { "weather_place", "the place it's for", "place" },
+            ph("weather_temp", "the temperature outside", "", "temp"),
+            ph("weather_condition", "clear, rain, snow and so on", ""),
+            ph("weather_icon", "a weather emoji", ""),
+            ph("weather_feels", "what the temperature feels like, counting wind and humidity", "feels", "temp"),
+            ph("weather_humidity", "relative humidity, as a percentage", "humidity"),
+            ph("weather_wind", "wind speed", "wind", "speed"),
+            ph("weather_place", "the place it's for", "place"),
         };
         m.example = "{weather_icon} {weather_temp} {weather_condition}";
+        d.push_back(m);
+    }
+    {
+        ModuleDef m;
+        m.id = "world";
+        m.title = "World";
+        m.icon = "\xf0\x9f\x8c\x8d";
+        m.description = "The world you're in, what kind of instance it is, and who's there, read from VRChat's log";
+        m.options = {
+            toggle("instance", "Instance number", false),
+            toggle("region", "Region", false),
+            toggle("time_here", "Time in this world", true),
+            when(choice("time_style", "Write the time as", "short", { { "short", "1h 2m" }, { "long", "1 hour, 2 minutes" }, { "clock", "1:02" } }), "time_here=1"),
+            toggle("last", "Who joined or left last", false),
+            toggle("id", "World ID", false),
+        };
+        m.placeholders = {
+            ph("world", "the name of the world you're in", ""),
+            ph("world_type", "the kind of instance: Public, Friends+, Friends, Invite+, Invite, Group, Group+ or Group Public", ""),
+            ph("players", "how many people are in your instance, counting you", ""),
+            ph("world_instance", "the instance number", "instance"),
+            ph("world_region", "the server region: US West, US East, Europe or Japan", "region"),
+            ph("world_time", "how long you've been in this world", "time_here"),
+            ph("last_joined", "the last person who joined your instance", "last"),
+            ph("last_left", "the last person who left your instance", "last"),
+            ph("world_id", "the world's ID (wrld_...)", "id"),
+        };
+        m.example = "\xf0\x9f\x8c\x8d {world} ({world_type}) \xc2\xb7 {players} here";
+        d.push_back(m);
+    }
+    {
+        ModuleDef m;
+        m.id = "friends";
+        m.title = "Friends";
+        m.icon = "\xf0\x9f\x91\xa5";
+        m.description = "Your status and your friends, from your VRChat account. Log in under Settings to use it";
+        m.options = {
+            toggle("status_text", "Your status text", false),
+            toggle("counts", "How many friends are online", true),
+            toggle("here", "Friends in your instance", false),
+            when(number("here_max", "Names to show at most", OptionKind::Integer, "3", 1, 20), "here=1"),
+            toggle("news", "Latest friend news", false, "Like \"Alex is online\" or \"Sam went to The Black Cat (Public)\""),
+        };
+        m.placeholders = {
+            ph("status", "your status: Join Me, Online, Ask Me or Do Not Disturb", ""),
+            ph("status_color", "your status's color: Blue, Green, Orange or Red", ""),
+            ph("status_icon", "a colored dot for your status", ""),
+            ph("status_text", "the text under your status", "status_text"),
+            ph("friends_online", "how many friends are in VRChat right now", "counts"),
+            ph("friends_web", "how many friends are only on the VRChat website", "counts"),
+            ph("friends_total", "how many friends you have", "counts"),
+            ph("friends_here", "how many of your friends are in your instance", "here"),
+            ph("friends_here_names", "their names", "here"),
+            ph("friend_news", "the latest thing a friend did", "news"),
+        };
+        m.example = "{status_icon} {status} \xc2\xb7 {friends_online} friends online";
         d.push_back(m);
     }
     {
@@ -323,9 +435,9 @@ std::vector<ModuleDef> build_defs() {
             toggle("id", "Avatar ID", false),
         };
         m.placeholders = {
-            { "avatar", "the avatar's name (or ID when there's no name)", "" },
-            { "params", "how many parameters it has", "" },
-            { "avatar_id", "the avatar's ID", "id" },
+            ph("avatar", "the avatar's name (or ID when there's no name)", ""),
+            ph("params", "how many parameters it has", ""),
+            ph("avatar_id", "the avatar's ID", "id"),
         };
         m.example = "Wearing {avatar}";
         d.push_back(m);
@@ -368,6 +480,12 @@ std::string fixed(double v, int decimals) {
     char buf[48];
     std::snprintf(buf, sizeof(buf), "%.*f", decimals, v);
     return buf;
+}
+
+std::string signed_fixed(double v, int decimals) {
+    std::string out = fixed(v, decimals);
+    if (!out.empty() && out[0] == '-' && out.find_first_not_of("-0.") == std::string::npos) out.erase(0, 1);
+    return out;
 }
 
 int to_int(const std::string& s, int fallback) {
@@ -421,6 +539,75 @@ const ModuleDef* module_of_placeholder(const std::string& name) {
     return nullptr;
 }
 
+const PlaceholderDef* find_placeholder(const ModuleDef& module, const std::string& name) {
+    for (const PlaceholderDef& p : module.placeholders) {
+        if (p.name == name) return &p;
+    }
+    return nullptr;
+}
+
+std::string placeholder_key(const std::string& placeholder, const std::string& setting) {
+    return placeholder + "." + setting;
+}
+
+std::vector<OptionDef> placeholder_settings(const ModuleDef&, const PlaceholderDef& placeholder) {
+    std::vector<OptionDef> out;
+    if (placeholder.percent) out.push_back(toggle("percent", "As a percentage", false, "Show it as a share of the total instead of an amount"));
+    if (placeholder.units == "bytes") {
+        out.push_back(choice("unit", "Unit", "default", with_default(byte_units())));
+    } else if (placeholder.units == "temp") {
+        out.push_back(choice("unit", "Unit", "default", with_default(temp_units())));
+        out.push_back(choice("also", "Also in", "default", with_default(with_none(temp_units()))));
+    } else if (placeholder.units == "speed") {
+        out.push_back(choice("unit", "Unit", "default", with_default(speed_units())));
+        out.push_back(choice("also", "Also in", "default", with_default(with_none(speed_units()))));
+    } else if (placeholder.units == "clock") {
+        out.push_back(choice("unit", "Unit", "default", with_default(clock_units())));
+    } else if (placeholder.units == "offset") {
+        out.push_back(choice("precision", "Shows", "default", with_default(offset_precisions())));
+    }
+    return out;
+}
+
+std::string placeholder_default(const ModuleOptions& options, const ModuleDef& module, const PlaceholderDef& placeholder, const std::string& setting) {
+    if (setting == "percent") return "0";
+    const std::string& kind = placeholder.units;
+    if (kind == "bytes" && setting == "unit") return option_value(options, "units", "bytes_unit");
+    if (kind == "temp" && setting == "unit") return option_value(options, "units", "temp_unit");
+    if (kind == "temp" && setting == "also") return option_value(options, "units", "temp_also");
+    if (kind == "speed" && setting == "unit") return option_value(options, module.id, "wind_unit");
+    if (kind == "speed" && setting == "also") return option_value(options, module.id, "wind_also");
+    if (kind == "clock" && setting == "unit") return option_value(options, module.id, "clock_unit");
+    if (kind == "offset" && setting == "precision") return option_value(options, module.id, "offset_precision");
+    return std::string();
+}
+
+std::string placeholder_value(const ModuleOptions& options, const ModuleDef& module, const PlaceholderDef& placeholder, const std::string& setting) {
+    const auto m = options.find(module.id);
+    if (m != options.end()) {
+        const auto o = m->second.find(placeholder_key(placeholder.name, setting));
+        if (o != m->second.end() && !o->second.empty() && o->second != "default") return o->second;
+    }
+    return placeholder_default(options, module, placeholder, setting);
+}
+
+std::vector<OptionDef> visible_placeholder_settings(const ModuleOptions& options, const ModuleDef& module, const PlaceholderDef& placeholder) {
+    std::vector<OptionDef> out;
+    const bool percent = placeholder.percent && placeholder_value(options, module, placeholder, "percent") == "1";
+    for (const OptionDef& o : placeholder_settings(module, placeholder)) {
+        if (percent && o.id != "percent") continue;
+        out.push_back(o);
+    }
+    return out;
+}
+
+std::string choice_label(const OptionDef& option, const std::string& value) {
+    for (const auto& c : option.choices) {
+        if (c.first == value) return c.second;
+    }
+    return value;
+}
+
 std::string option_value(const ModuleOptions& options, const std::string& module, const std::string& option) {
     const auto m = options.find(module);
     if (m != options.end()) {
@@ -429,6 +616,14 @@ std::string option_value(const ModuleOptions& options, const std::string& module
     }
     if (const ModuleDef* def = find_module(module)) {
         if (const OptionDef* o = find_option(*def, option)) return o->fallback;
+        const std::size_t dot = option.find('.');
+        if (dot != std::string::npos) {
+            if (const PlaceholderDef* p = find_placeholder(*def, option.substr(0, dot))) {
+                for (const OptionDef& o : placeholder_settings(*def, *p)) {
+                    if (o.id == option.substr(dot + 1)) return o.fallback;
+                }
+            }
+        }
     }
     return std::string();
 }
@@ -465,6 +660,23 @@ bool set_option(ModuleOptions& options, const std::string& module, const std::st
         return false;
     }
     const OptionDef* o = find_option(*m, option);
+    std::vector<OptionDef> settings;
+    const std::size_t dot = option.find('.');
+    if (!o && dot != std::string::npos) {
+        const PlaceholderDef* p = find_placeholder(*m, option.substr(0, dot));
+        if (p) settings = placeholder_settings(*m, *p);
+        for (const OptionDef& s : settings) {
+            if (s.id == option.substr(dot + 1)) o = &s;
+        }
+    }
+    if (!o && option == "percent") {
+        bool any = false;
+        for (const PlaceholderDef& p : m->placeholders) {
+            if (!p.percent) continue;
+            any = set_option(options, module, placeholder_key(p.name, "percent"), value, error) || any;
+        }
+        if (any) return true;
+    }
     if (!o) {
         if (error) *error = m->title + " has no option called " + option;
         return false;
@@ -523,13 +735,16 @@ Units units_of(const ModuleOptions& options) {
     u.temp_unit = option_value(options, "units", "temp_unit");
     u.temp_label = option_on(options, "units", "temp_label");
     u.unknown = option_value(options, "units", "unknown");
+    u.temp_also = option_value(options, "units", "temp_also");
+    u.temp_decimals = to_int(option_value(options, "units", "temp_decimals"), 0);
+    u.both_style = option_value(options, "units", "both_style");
     return u;
 }
 
-std::string format_bytes(double bytes, const Units& units) {
+std::string format_bytes_in(double bytes, const std::string& unit_name, int decimals, bool label) {
     static const char* names[] = { "B", "KB", "MB", "GB", "TB" };
     int unit = 0;
-    if (units.bytes_unit == "auto") {
+    if (unit_name == "auto" || unit_name.empty()) {
         double v = bytes;
         while (v >= 1024.0 && unit < 4) {
             v /= 1024.0;
@@ -537,22 +752,46 @@ std::string format_bytes(double bytes, const Units& units) {
         }
     } else {
         for (int i = 0; i < 5; ++i) {
-            if (units.bytes_unit == names[i]) unit = i;
+            if (unit_name == names[i]) unit = i;
         }
     }
     const double v = bytes / std::pow(1024.0, unit);
-    const std::string n = fixed(v, unit == 0 ? 0 : units.bytes_decimals);
-    return units.bytes_label ? n + " " + names[unit] : n;
+    const std::string n = fixed(v, unit == 0 ? 0 : decimals);
+    return label ? n + " " + names[unit] : n;
+}
+
+std::string format_bytes(double bytes, const Units& units) {
+    return format_bytes_in(bytes, units.bytes_unit, units.bytes_decimals, units.bytes_label);
 }
 
 std::string format_percent(double percent, const Units& units) {
     return fixed(percent, units.percent_decimals) + "%";
 }
 
+std::string format_temp_in(double celsius, const std::string& unit, int decimals, bool label) {
+    if (unit == "F") return signed_fixed(celsius * 9.0 / 5.0 + 32.0, decimals) + (label ? "\xc2\xb0" "F" : "");
+    if (unit == "K") return signed_fixed(celsius + 273.15, decimals) + (label ? " K" : "");
+    return signed_fixed(celsius, decimals) + (label ? "\xc2\xb0" "C" : "");
+}
+
 std::string format_temp(double celsius, const Units& units) {
-    if (units.temp_unit == "F") return fixed(celsius * 9.0 / 5.0 + 32.0, 0) + (units.temp_label ? "\xc2\xb0" "F" : "");
-    if (units.temp_unit == "K") return fixed(celsius + 273.15, 0) + (units.temp_label ? " K" : "");
-    return fixed(celsius, 0) + (units.temp_label ? "\xc2\xb0" "C" : "");
+    const std::string first = format_temp_in(celsius, units.temp_unit, units.temp_decimals, units.temp_label);
+    if (units.temp_also.empty() || units.temp_also == "none" || units.temp_also == units.temp_unit) return first;
+    return format_both(first, format_temp_in(celsius, units.temp_also, units.temp_decimals, units.temp_label), units.both_style);
+}
+
+std::string format_speed(double kmh, const std::string& unit, int decimals) {
+    if (unit == "mph") return signed_fixed(kmh / 1.609344, decimals) + " mph";
+    if (unit == "ms") return signed_fixed(kmh / 3.6, decimals) + " m/s";
+    if (unit == "kn") return signed_fixed(kmh / 1.852, decimals) + " kn";
+    if (unit == "fts") return signed_fixed(kmh / 1.09728, decimals) + " ft/s";
+    return signed_fixed(kmh, decimals) + " km/h";
+}
+
+std::string format_both(const std::string& first, const std::string& second, const std::string& style) {
+    if (style == "slash") return first + " / " + second;
+    if (style == "space") return first + " " + second;
+    return first + " (" + second + ")";
 }
 
 std::string format_clock(double mhz, const std::string& unit) {
@@ -610,6 +849,32 @@ std::string format_clock_time(const std::tm& tm, bool hour24, bool seconds, bool
     return out;
 }
 
+long long utc_offset_seconds(std::time_t t) {
+    const std::tm l = local_tm(t);
+    const std::tm g = utc_tm(t);
+    long long days = 0;
+    if (l.tm_year != g.tm_year) days = l.tm_year > g.tm_year ? 1 : -1;
+    else days = l.tm_yday - g.tm_yday;
+    return days * 86400 + (l.tm_hour - g.tm_hour) * 3600LL + (l.tm_min - g.tm_min) * 60LL + (l.tm_sec - g.tm_sec);
+}
+
+std::string format_offset(long long seconds, const std::string& precision, const std::string& style, const std::string& name) {
+    const char sign = seconds < 0 ? '-' : '+';
+    long long a = seconds < 0 ? -seconds : seconds;
+    if (precision == "hours") a = (a + 1800) / 3600 * 3600;
+    const long long h = a / 3600, m = (a / 60) % 60, s = a % 60;
+    const bool padded = style == "padded" || style == "named_padded";
+    const bool named = style == "named" || style == "named_padded";
+    std::string out = named ? name : std::string();
+    out += sign;
+    out += padded ? two(static_cast<int>(h)) : std::to_string(h);
+    const bool show_seconds = precision == "seconds" || (precision != "hours" && precision != "minutes" && s != 0);
+    const bool show_minutes = show_seconds || precision == "minutes" || (precision != "hours" && m != 0);
+    if (show_minutes) out += ":" + two(static_cast<int>(m));
+    if (show_seconds) out += ":" + two(static_cast<int>(s));
+    return out;
+}
+
 WeatherConfig weather_config(const ModuleOptions& options) {
     WeatherConfig c;
     c.coordinates = option_value(options, "weather", "mode") == "coordinates";
@@ -625,47 +890,58 @@ void module_values(const ModuleDef& module, const ModuleOptions& options, const 
     const std::string& id = module.id;
     StatusValues v;
     auto known = [&](const std::optional<double>& x, const std::function<std::string(double)>& f) { return x ? f(*x) : u.unknown; };
-    auto amount = [&](const std::optional<double>& x, const std::optional<double>& total, bool percent) {
-        if (!x) return u.unknown;
-        if (percent) return total && *total > 0.0 ? format_percent(100.0 * *x / *total, u) : u.unknown;
-        return format_bytes(*x, u);
+    auto setting = [&](const std::string& name, const std::string& which) {
+        const PlaceholderDef* p = find_placeholder(module, name);
+        return p ? placeholder_value(options, module, *p, which) : std::string();
     };
+    auto amount = [&](const std::string& name, const std::optional<double>& x, const std::optional<double>& total) {
+        if (!x) return u.unknown;
+        const PlaceholderDef* p = find_placeholder(module, name);
+        if (p && p->percent && setting(name, "percent") == "1") return total && *total > 0.0 ? format_percent(100.0 * *x / *total, u) : u.unknown;
+        return format_bytes_in(*x, setting(name, "unit"), u.bytes_decimals, u.bytes_label);
+    };
+    auto temp = [&](const std::string& name, const std::optional<double>& c) {
+        if (!c) return u.unknown;
+        Units t = u;
+        t.temp_unit = setting(name, "unit");
+        t.temp_also = setting(name, "also");
+        return format_temp(*c, t);
+    };
+    auto clock = [&](const std::string& name, const std::optional<double>& mhz) { return mhz ? format_clock(*mhz, setting(name, "unit")) : u.unknown; };
     const SensorSnapshot& s = in.sensors;
 
     if (id == "cpu") {
         v["cpu"] = known(s.cpu_percent, [&](double p) { return format_percent(p, u); });
-        v["cpu_clock"] = known(s.cpu_mhz, [&](double mhz) { return format_clock(mhz, option_value(options, id, "clock_unit")); });
+        v["cpu_clock"] = clock("cpu_clock", s.cpu_mhz);
         const std::string custom = option_value(options, id, "custom_name");
         v["cpu_name"] = !custom.empty() ? custom : (s.cpu_name.empty() ? u.unknown : s.cpu_name);
-        v["cpu_temp"] = known(s.cpu_temp, [&](double t) { return format_temp(t, u); });
+        v["cpu_temp"] = temp("cpu_temp", s.cpu_temp);
         v["cpu_threads"] = s.cpu_threads ? std::to_string(s.cpu_threads) : u.unknown;
     } else if (id == "gpu") {
-        const bool pct = option_on(options, id, "percent");
         std::optional<double> free;
         if (s.vram_total && s.vram_used) free = *s.vram_total - *s.vram_used;
         v["gpu"] = known(s.gpu_percent, [&](double p) { return format_percent(p, u); });
         const std::string custom = option_value(options, id, "custom_name");
         v["gpu_name"] = !custom.empty() ? custom : (s.gpu_name.empty() ? u.unknown : s.gpu_name);
-        v["gpu_temp"] = known(s.gpu_temp, [&](double t) { return format_temp(t, u); });
-        v["gpu_clock"] = known(s.gpu_mhz, [&](double mhz) { return format_clock(mhz, option_value(options, id, "clock_unit")); });
-        v["gpu_used"] = amount(s.vram_used, s.vram_total, pct);
-        v["gpu_total"] = amount(s.vram_total, s.vram_total, false);
-        v["gpu_free"] = amount(free, s.vram_total, pct);
-        v["gpu_app"] = amount(s.vram_app, s.vram_total, pct);
-        v["gpu_vrchat"] = s.vrchat_running ? amount(s.vram_vrchat, s.vram_total, pct) : u.unknown;
+        v["gpu_temp"] = temp("gpu_temp", s.gpu_temp);
+        v["gpu_clock"] = clock("gpu_clock", s.gpu_mhz);
+        v["gpu_used"] = amount("gpu_used", s.vram_used, s.vram_total);
+        v["gpu_total"] = amount("gpu_total", s.vram_total, s.vram_total);
+        v["gpu_free"] = amount("gpu_free", free, s.vram_total);
+        v["gpu_app"] = amount("gpu_app", s.vram_app, s.vram_total);
+        v["gpu_vrchat"] = s.vrchat_running ? amount("gpu_vrchat", s.vram_vrchat, s.vram_total) : u.unknown;
     } else if (id == "ram" || id == "vram") {
         const bool ram = id == "ram";
-        const bool pct = option_on(options, id, "percent");
         const std::optional<double>& total = ram ? s.ram_total : s.vram_total;
         const std::optional<double>& used = ram ? s.ram_used : s.vram_used;
         std::optional<double> free;
         if (total && used) free = *total - *used;
         v[id] = total && used && *total > 0.0 ? format_percent(100.0 * *used / *total, u) : u.unknown;
-        v[id + "_used"] = amount(used, total, pct);
-        v[id + "_total"] = amount(total, total, false);
-        v[id + "_free"] = amount(free, total, pct);
-        v[id + "_app"] = amount(ram ? s.ram_app : s.vram_app, total, pct);
-        v[id + "_vrchat"] = s.vrchat_running ? amount(ram ? s.ram_vrchat : s.vram_vrchat, total, pct) : u.unknown;
+        v[id + "_used"] = amount(id + "_used", used, total);
+        v[id + "_total"] = amount(id + "_total", total, total);
+        v[id + "_free"] = amount(id + "_free", free, total);
+        v[id + "_app"] = amount(id + "_app", ram ? s.ram_app : s.vram_app, total);
+        v[id + "_vrchat"] = s.vrchat_running ? amount(id + "_vrchat", ram ? s.ram_vrchat : s.vram_vrchat, total) : u.unknown;
     } else if (id == "uptime") {
         const bool days = option_on(options, id, "days");
         const bool secs = option_on(options, id, "seconds");
@@ -705,8 +981,14 @@ void module_values(const ModuleDef& module, const ModuleOptions& options, const 
         const std::tm utc = utc_tm(t);
         v["utc"] = format_clock_time(utc, h24, secs, zero);
         v["gmt"] = v["utc"];
-        const std::tm tai = utc_tm(t + to_int(option_value(options, id, "tai_offset"), 37));
+        const int tai_seconds = to_int(option_value(options, id, "tai_offset"), 37);
+        const std::tm tai = utc_tm(t + tai_seconds);
         v["tai"] = format_clock_time(tai, h24, secs, zero);
+        const long long offset = utc_offset_seconds(t);
+        const std::string style = option_value(options, id, "offset_style");
+        v["utc_offset"] = format_offset(offset, setting("utc_offset", "precision"), style, "UTC");
+        v["gmt_offset"] = format_offset(offset, setting("gmt_offset", "precision"), style, "GMT");
+        v["tai_offset"] = format_offset(offset - tai_seconds, setting("tai_offset", "precision"), style, "TAI");
     } else if (id == "date") {
         const std::tm d = local_tm(std::chrono::system_clock::to_time_t(in.now));
         const std::string month_style = option_value(options, id, "month");
@@ -736,29 +1018,59 @@ void module_values(const ModuleDef& module, const ModuleOptions& options, const 
     } else if (id == "weather") {
         const WeatherSnapshot& w = in.weather;
         if (w.ok) {
-            const std::string wind_unit = option_value(options, id, "wind_unit");
-            double wind = w.wind_kmh;
-            std::string label = "km/h";
-            if (wind_unit == "mph") {
-                wind /= 1.609344;
-                label = "mph";
-            } else if (wind_unit == "ms") {
-                wind /= 3.6;
-                label = "m/s";
-            } else if (wind_unit == "kn") {
-                wind /= 1.852;
-                label = "kn";
-            }
-            v["weather_temp"] = format_temp(w.temp_c, u);
-            v["weather_feels"] = format_temp(w.feels_c, u);
+            const int wind_decimals = to_int(option_value(options, id, "wind_decimals"), 0);
+            const std::string wind_unit = setting("weather_wind", "unit");
+            const std::string wind_also = setting("weather_wind", "also");
+            std::string wind = format_speed(w.wind_kmh, wind_unit, wind_decimals);
+            if (!wind_also.empty() && wind_also != "none" && wind_also != wind_unit) wind = format_both(wind, format_speed(w.wind_kmh, wind_also, wind_decimals), u.both_style);
+            v["weather_temp"] = temp("weather_temp", w.temp_c);
+            v["weather_feels"] = temp("weather_feels", w.feels_c);
             v["weather_condition"] = weather_condition(w.code);
             v["weather_icon"] = weather_icon(w.code, w.is_day);
             v["weather_humidity"] = fixed(w.humidity, 0) + "%";
-            v["weather_wind"] = fixed(wind, 0) + " " + label;
+            v["weather_wind"] = wind;
             v["weather_place"] = w.place;
         } else {
             for (const PlaceholderDef& p : module.placeholders) v[p.name] = u.unknown;
         }
+    } else if (id == "world") {
+        const WorldSnapshot& w = in.world;
+        if (w.in_world) {
+            v["world"] = w.world_name.empty() ? u.unknown : w.world_name;
+            v["world_type"] = w.info.valid ? access_label(w.info.access) : u.unknown;
+            v["players"] = std::to_string(w.players.size());
+            v["world_instance"] = w.info.instance.empty() ? u.unknown : w.info.instance;
+            v["world_region"] = w.info.valid ? region_label(w.info.region) : u.unknown;
+            const double here = std::chrono::duration<double>(in.now - w.entered).count();
+            v["world_time"] = here >= 0.0 ? format_span(here, true, false, option_value(options, id, "time_style")) : u.unknown;
+            v["world_id"] = w.info.world_id.empty() ? u.unknown : w.info.world_id;
+        } else {
+            for (const char* name : { "world", "world_type", "players", "world_instance", "world_region", "world_time", "world_id" }) v[name] = u.unknown;
+        }
+        v["last_joined"] = in.last_joined.empty() ? u.unknown : in.last_joined;
+        v["last_left"] = in.last_left.empty() ? u.unknown : in.last_left;
+    } else if (id == "friends") {
+        const bool on = in.account.state == LoginState::LoggedIn;
+        const std::string& status = in.account.me.status;
+        v["status"] = on && !status.empty() ? status_label(status) : u.unknown;
+        v["status_color"] = on && !status.empty() ? status_color(status) : u.unknown;
+        v["status_icon"] = on && !status.empty() ? status_icon(status) : u.unknown;
+        v["status_text"] = on && !in.account.me.status_text.empty() ? in.account.me.status_text : u.unknown;
+        v["friends_online"] = on ? std::to_string(in.friends_online) : u.unknown;
+        v["friends_web"] = on ? std::to_string(in.friends_web) : u.unknown;
+        v["friends_total"] = on ? std::to_string(in.friends_total) : u.unknown;
+        v["friends_here"] = on ? std::to_string(in.friends_here.size()) : u.unknown;
+        const int max = to_int(option_value(options, id, "here_max"), 3);
+        std::string names;
+        for (std::size_t i = 0; i < in.friends_here.size(); ++i) {
+            if (static_cast<int>(i) >= max) {
+                names += " +" + std::to_string(in.friends_here.size() - i);
+                break;
+            }
+            names += (i ? ", " : "") + in.friends_here[i];
+        }
+        v["friends_here_names"] = names.empty() ? u.unknown : names;
+        v["friend_news"] = in.friend_news.empty() ? u.unknown : in.friend_news;
     } else if (id == "avatar") {
         v["avatar"] = !in.avatar_name.empty() ? in.avatar_name : (in.avatar_id.empty() ? u.unknown : in.avatar_id);
         v["avatar_id"] = in.avatar_id.empty() ? u.unknown : in.avatar_id;

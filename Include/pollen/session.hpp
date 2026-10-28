@@ -8,6 +8,8 @@
 #include "settings.hpp"
 #include "status.hpp"
 #include "system_stats.hpp"
+#include "vrchat_api.hpp"
+#include "vrchat_log.hpp"
 
 #include <osc/osc.hpp>
 
@@ -25,6 +27,15 @@ struct LogLine {
     char kind = 'i';
     double seconds = 0.0;
     std::string text;
+};
+
+struct Activity {
+    std::uint64_t seq = 0;
+    std::chrono::system_clock::time_point time;
+    std::string kind;
+    std::string text;
+    std::string user_id;
+    bool friend_related = false;
 };
 
 struct ParamRow {
@@ -101,7 +112,21 @@ public:
     bool set_module_template(const std::string& module, const std::string& text, std::string* error = nullptr);
     double connected_seconds() const;
 
+    void start_vrchat(const std::string& user_agent);
+    VrchatApi& vrchat() noexcept { return m_api; }
+    const VrchatApi& vrchat() const noexcept { return m_api; }
+    const WorldSnapshot& world() const noexcept { return m_vrclog.world(); }
+    std::string world_name();
+    bool found_vrchat_log() const noexcept { return m_vrclog.found(); }
+    std::string vrchat_log_file() const { return m_vrclog.file().string(); }
+    std::vector<Activity> activity_since(std::uint64_t seq, std::size_t max = 300) const;
+    std::uint64_t activity_seq() const noexcept { return m_activity_seq; }
+    void clear_activity();
+
 private:
+    void poll_vrchat();
+    void add_activity(const std::string& kind, const std::string& text, const std::string& user_id, bool friend_related, std::chrono::system_clock::time_point time);
+
     void apply_avatar(osc::vrchat::AvatarSnapshot snapshot);
     void start_link();
 
@@ -126,6 +151,14 @@ private:
     bool m_typing = false;
     bool m_heard = false;
     std::chrono::steady_clock::time_point m_heard_since;
+    VrchatLog m_vrclog;
+    VrchatApi m_api;
+    std::deque<Activity> m_activity;
+    std::uint64_t m_activity_seq = 0;
+    std::chrono::steady_clock::time_point m_last_vrchat_poll;
+    std::string m_last_joined;
+    std::string m_last_left;
+    std::string m_friend_news;
 };
 
 std::optional<osc::Message> parse_message_line(const std::string& line, std::string* error = nullptr);

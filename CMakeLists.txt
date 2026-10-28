@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(pollen VERSION 0.1.1 DESCRIPTION "Pollen: a VRChat OSC app for Linux, Windows and macOS built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
+project(pollen VERSION 0.1.2 DESCRIPTION "Pollen: a VRChat OSC app for Linux, Windows and macOS built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -104,7 +104,9 @@ add_library(pollen_core STATIC
     Source/pollen/sensors_windows.cpp
     Source/pollen/nvml.cpp
     Source/pollen/modules.cpp
-    Source/pollen/weather.cpp)
+    Source/pollen/weather.cpp
+    Source/pollen/vrchat_log.cpp
+    Source/pollen/vrchat_api.cpp)
 add_library(pollen::core ALIAS pollen_core)
 target_include_directories(pollen_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Include")
 target_link_libraries(pollen_core PUBLIC pollen_osc ${CMAKE_DL_LIBS})

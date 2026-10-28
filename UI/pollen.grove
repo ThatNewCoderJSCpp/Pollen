@@ -16,6 +16,8 @@
             <button class="tab" to="home">Dashboard</button>
             <button class="tab" to="params">Parameters</button>
             <button class="tab" to="chat">Chatbox</button>
+            <button class="tab" to="social">VRChat</button>
+            <button class="tab" to="favorites">Favorites</button>
             <button class="tab" to="modules">Modules</button>
             <button class="tab" to="monitor">Monitor</button>
             <button class="tab" to="settings">Settings</button>
@@ -62,9 +64,9 @@
                     <column class="card">
                         <div class="card-title">This computer</div>
                         <row class="stats">
-                            <column class="stat"><div id="sys-cpu" class="stat-num">-</div><div class="stat-label">CPU</div></column>
-                            <column class="stat"><div id="sys-gpu" class="stat-num">-</div><div class="stat-label">GPU</div></column>
-                            <column class="stat"><div id="sys-ram" class="stat-num">-</div><div class="stat-label">RAM</div></column>
+                            <column class="stat"><div id="sys-cpu" class="stat-num">-</div><div class="stat-label">CPU load</div></column>
+                            <column class="stat"><div id="sys-gpu" class="stat-num">-</div><div class="stat-label">GPU load</div></column>
+                            <column class="stat"><div id="sys-ram" class="stat-num">-</div><div class="stat-label">RAM in use</div></column>
                             <column class="stat"><div id="sys-up" class="stat-num small">-</div><div class="stat-label">uptime</div></column>
                         </row>
                         <row class="kv"><text class="k">CPU</text><text id="sys-cpu-name" class="v">-</text></row>
@@ -143,7 +145,8 @@
                     </row>
                     <p class="hint">Pollen sends this to the chatbox on a timer. Put a line with only --- between messages to rotate through them. A line whose placeholders are all empty is left out, so a song line disappears when nothing is playing. Click a placeholder to add it, and open the Modules tab for more.</p>
                     <input_code id="status-template" class="template" language="text" line-numbers="false" autocomplete="false"></input_code>
-                    <row class="placeholders" id="placeholders"></row>
+                    <div class="sub-title">Placeholders you can use</div>
+                    <column id="placeholders" class="ph-list status-ph"></column>
                     <row class="compose-meta">
                         <text class="muted">Every</text>
                         <input_float id="status-interval" class="interval" value="3" min="2" max="120" step="0.5" />
@@ -158,9 +161,107 @@
             </column>
         </page>
 
+        <page id="social">
+            <column class="scroll page-body">
+                <column id="social-login" class="card hint-card hidden">
+                    <div class="card-title">Your VRChat account</div>
+                    <p class="hint">Log in to VRChat to see your friends, their status and where they are, and to get told when they come online, move, or unfriend you. Where you are and who's in your instance works without logging in, from VRChat's log.</p>
+                    <row class="actions"><button class="primary" to="settings">Log in under Settings</button></row>
+                </column>
+                <row class="cards">
+                    <column class="card">
+                        <div class="card-title">Where you are</div>
+                        <div id="w-name" class="big">Not in a world</div>
+                        <row class="kv"><text class="k">Instance type</text><text id="w-type" class="v">-</text></row>
+                        <row class="kv"><text class="k">Region</text><text id="w-region" class="v">-</text></row>
+                        <row class="kv"><text class="k">Instance</text><text id="w-instance" class="v mono">-</text></row>
+                        <row class="kv"><text class="k">People here</text><text id="w-players" class="v">-</text></row>
+                        <row class="kv"><text class="k">Here since</text><text id="w-since" class="v">-</text></row>
+                        <div id="w-note" class="muted small-note"></div>
+                    </column>
+                    <column class="card">
+                        <div class="card-title">You</div>
+                        <row class="me-row">
+                            <text id="me-dot" class="status-dot">&#9679;</text>
+                            <column class="grow">
+                                <div id="me-name" class="big">Not logged in</div>
+                                <div id="me-status" class="muted"></div>
+                            </column>
+                        </row>
+                        <row class="kv"><text class="k">Friends online</text><text id="me-online" class="v">-</text></row>
+                        <row class="kv"><text class="k">On the website</text><text id="me-web" class="v">-</text></row>
+                        <row class="kv"><text class="k">Live updates</text><text id="me-live" class="v">-</text></row>
+                        <row class="actions">
+                            <button id="me-refresh" class="ghost">Refresh friends</button>
+                            <text id="me-note" class="muted"></text>
+                        </row>
+                    </column>
+                </row>
+                <row class="cards">
+                    <column class="card social-half">
+                        <div class="card-title">People in your instance</div>
+                        <column id="players" class="people"></column>
+                    </column>
+                    <column class="card social-half">
+                        <row class="card-head">
+                            <div class="card-title">What's happening</div>
+                            <div class="grow"></div>
+                            <button id="act-clear" class="ghost small">Clear</button>
+                        </row>
+                        <row class="filters">
+                            <input_bool id="f-friends" switch>Joins and leaves of friends only</input_bool>
+                            <input_bool id="f-joins" switch checked>Joins and leaves</input_bool>
+                            <input_bool id="f-online" switch checked>Online and offline</input_bool>
+                            <input_bool id="f-moves" switch checked>Where friends go</input_bool>
+                            <input_bool id="f-status" switch checked>Status changes</input_bool>
+                        </row>
+                        <column id="activity" class="activity"></column>
+                    </column>
+                </row>
+                <column class="card">
+                    <row class="card-head">
+                        <div class="card-title">Friends</div>
+                        <div class="grow"></div>
+                        <input_string id="fr-search" class="search" placeholder="Search friends" />
+                        <input_select id="fr-filter" value="all">
+                            <option value="all">Everyone</option>
+                            <option value="here">In your instance</option>
+                            <option value="online">In VRChat</option>
+                            <option value="web">On the website</option>
+                            <option value="offline">Offline</option>
+                        </input_select>
+                    </row>
+                    <p class="hint">VRChat hides where friends are when they're in a private instance; Pollen shows how long they've been there and the last world it saw them in.</p>
+                    <column id="friend-list" class="people"></column>
+                </column>
+            </column>
+        </page>
+
+        <page id="favorites">
+            <row class="toolbar">
+                <input_select id="fav-kind" value="avatars">
+                    <option value="avatars">Favorite avatars</option>
+                    <option value="worlds">Favorite worlds</option>
+                    <option value="friends">Favorite friends</option>
+                    <option value="stickers">Stickers</option>
+                    <option value="emojis">Emojis</option>
+                    <option value="items">Items</option>
+                </input_select>
+                <input_string id="fav-filter" class="search" placeholder="Search" />
+                <input_bool id="fav-archived" switch>Show archived</input_bool>
+                <div class="grow"></div>
+                <text id="fav-status" class="muted"></text>
+                <button id="fav-refresh" class="ghost">Reload</button>
+            </row>
+            <column id="fav-list" class="scroll list"></column>
+            <row class="toolbar bottom">
+                <text id="fav-note" class="muted"></text>
+            </row>
+        </page>
+
         <page id="modules">
             <column class="scroll page-body">
-                <p class="hint">Each module gives you placeholders for status messages. Every placeholder is one value on its own, so you decide how they're put together, like {gpu_used} / {gpu_total}. Open a module to choose what it shows and try it out.</p>
+                <p class="hint modules-hint">Each module gives you placeholders for status messages. Every placeholder is one value on its own, so you decide how they're put together, like {gpu_used} / {gpu_total}. Open a module to choose what it shows, pick units for each placeholder, and try it out.</p>
                 <row id="module-grid" class="module-grid"></row>
             </column>
         </page>
@@ -177,10 +278,12 @@
             <column class="modal-body">
                 <div class="sub-title">Options</div>
                 <column id="mm-options" class="mm-options"></column>
+                <div class="sub-title">Placeholders</div>
+                <p class="hint">Click a placeholder to add it to the box below. Each one can have its own unit, or be a percentage, without changing the others.</p>
+                <column id="mm-chips" class="ph-list"></column>
                 <div class="sub-title">Try it</div>
                 <input_code id="mm-template" class="mm-template" language="text" line-numbers="false" autocomplete="false"></input_code>
                 <div id="mm-warning" class="warning hidden"></div>
-                <row id="mm-chips" class="placeholders"></row>
                 <pre id="mm-preview" class="preview"></pre>
                 <div id="mm-status" class="mm-status"></div>
                 <row class="actions">
@@ -222,8 +325,42 @@
                     </row>
                 </column>
                 <column class="card">
+                    <div class="card-title">VRChat account</div>
+                    <p class="hint">Pollen uses your VRChat account for the VRChat and Favorites tabs and the Friends module. It keeps only the login session, in vrchat-session.json next to its settings and readable only by you, never your password. VRChat's web API isn't official, so VRChat can change it at any time.</p>
+                    <div id="vrc-state" class="big">Not logged in</div>
+                    <div id="vrc-message" class="muted"></div>
+                    <column id="vrc-login-box" class="vrc-box">
+                        <row class="field"><text class="label">Username or email</text><input_string id="vrc-user" class="wide" /></row>
+                        <row class="field"><text class="label">Password</text><input_string id="vrc-pass" class="wide" masked /></row>
+                        <row class="actions">
+                            <button id="vrc-login" class="primary">Log in</button>
+                            <text class="muted">or</text>
+                            <button id="vrc-code-login" class="ghost">Log in by approving a code on vrchat.com</button>
+                        </row>
+                    </column>
+                    <column id="vrc-code-box" class="vrc-box hidden">
+                        <row class="field"><text class="label">Code</text><input_string id="vrc-code" class="wide" placeholder="123456" /></row>
+                        <row class="actions">
+                            <button id="vrc-verify" class="primary">Check the code</button>
+                            <button id="vrc-cancel-code" class="ghost">Cancel</button>
+                        </row>
+                    </column>
+                    <column id="vrc-approve-box" class="vrc-box hidden">
+                        <text class="muted">The code to approve</text>
+                        <div id="vrc-device-code" class="device-code"></div>
+                        <row class="actions">
+                            <button id="vrc-open" class="primary">Open vrchat.com</button>
+                            <button id="vrc-copy" class="ghost">Copy the link</button>
+                            <button id="vrc-cancel-approve" class="ghost">Cancel</button>
+                        </row>
+                    </column>
+                    <row id="vrc-out-box" class="actions hidden">
+                        <button id="vrc-logout" class="ghost">Log out</button>
+                    </row>
+                </column>
+                <column class="card">
                     <div class="card-title">VRChat's OSC folder</div>
-                    <p class="hint">Pollen reads each avatar's parameter list from here. It looks in Proton's prefix for every Steam library it finds, so most people never need to set this.</p>
+                    <p class="hint">Pollen reads each avatar's parameter list from here, and VRChat's log from the folder above it. It looks in Proton's prefix for every Steam library it finds, so most people never need to set this.</p>
                     <row class="field">
                         <text class="label">Extra folder</text>
                         <input_file id="set-folder" mode="folder" title="Pick VRChat's OSC folder">Choose folder...</input_file>

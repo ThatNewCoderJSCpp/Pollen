@@ -14,6 +14,15 @@ string: last_sent = "";
 string: compose_now = "";
 string: module_open = "";
 bool: module_grid_built = false;
+string: vrc_friends_rev = "";
+string: vrc_coll_rev = "";
+string: vrc_act_seq = "0";
+long int: act_rows = 0l;
+string: vrc_state_shown = "";
+string: players_shown = "";
+string: friends_query = "";
+bool: logged_in = false;
+string: fav_loaded_kind = "";
 
 function call(const string&: name, const string&: arg) -> string;
 function el(const string&: tag, const string&: cls, const string&: label) -> grove::Element;
@@ -47,11 +56,28 @@ function open_module(const string&: id) -> void;
 function build_module_options() -> void;
 function option_changed(const string&: option, const string&: value) -> void;
 function update_module_chips() -> void;
+function placeholder_row(const string&: name, const string&: desc) -> grove::Element;
+function add_placeholder_settings(grove::Element&: row, const string&: name) -> void;
+function placeholder_changed(const string&: name, const string&: setting, const string&: value) -> void;
 function update_module_preview() -> void;
 function insert_module_placeholder(const string&: name) -> void;
 function fill_status_chips() -> void;
 function insert_status_placeholder(const string&: name) -> void;
 function dash(const string&: value) -> string;
+function status_class(const string&: status) -> string;
+function activity_flags() -> string;
+function update_account() -> void;
+function update_world() -> void;
+function build_players() -> void;
+function update_activity(bool: reset) -> void;
+function build_friends() -> void;
+function friend_action(const string&: action, const string&: id, const string&: name) -> void;
+function act_button(const string&: label, const string&: action, const string&: id, const string&: name) -> grove::Element;
+function build_favorites() -> void;
+function load_favorites() -> void;
+function fav_row(const string&: kind, const string&: line, const string&: groups) -> grove::Element;
+function confirm_act(const string&: title, const string&: message, const string&: args) -> void;
+function update_social() -> void;
 
 function call(const string&: name, const string&: arg) -> string {
     return grove::call("pollen." + name, arg);
@@ -734,10 +760,92 @@ function option_changed(const string&: option, const string&: value) -> void {
     fill_status_chips();
 } end function option_changed
 
+function placeholder_row(const string&: name, const string&: desc) -> grove::Element {
+    grove::Element: row = el("column", "ph-row", "");
+    grove::Element: head = el("row", "ph-head", "");
+    grove::Element: holder = el("row", "ph-chip", "");
+    grove::Element: chip = el("text", "chip", name);
+    chip.set_attribute("title", "Click to add " + name);
+    holder.append_child(chip);
+    head.append_child(holder);
+    head.append_child(el("div", "ph-desc", desc));
+    row.append_child(head);
+    return row;
+} end function placeholder_row
+
+function add_placeholder_settings(grove::Element&: row, const string&: name) -> void {
+    auto: rows = call("placeholder_options", tab2(module_open, name)).split("\n");
+    grove::Element: box = el("row", "ph-settings", "");
+    long int: count = 0l;
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 6l) then {
+            continue;
+        }
+        string: setting = f[1];
+        if (f[0] == "bool") then {
+            grove::Element: b = grove::create_element("input_bool");
+            b.set_attribute("switch", "");
+            b.set_inner_text(f[2]);
+            if (!f[4].empty()) then {
+                b.set_attribute("title", f[4]);
+            }
+            b.set_value_bool(f[3] == "1");
+            b.on("change", [name, setting](grove::Event&: e) -> void {
+                if (e.target().value_bool()) then {
+                    placeholder_changed(name, setting, "1");
+                } else then {
+                    placeholder_changed(name, setting, "0");
+                }
+            });
+            box.append_child(b);
+        } else then {
+            grove::Element: pair = el("row", "ph-setting", "");
+            pair.append_child(el("text", "ph-label", f[2]));
+            grove::Element: sel = grove::create_element("input_select");
+            sel.set_attribute("class", "ph-select");
+            auto: choices = f[5].split("|");
+            for (long int: c = 0l; c < choices.size(); c += 1l) {
+                auto: kv = choices[c].split("=");
+                if (kv.size() < 2l) then {
+                    continue;
+                }
+                grove::Element: o = grove::create_element("option");
+                o.set_attribute("value", kv[0]);
+                o.set_inner_text(kv[1]);
+                sel.append_child(o);
+            }
+            sel.set_attribute("value", f[3]);
+            sel.on("change", [name, setting](grove::Event&: e) -> void {
+                placeholder_changed(name, setting, e.target().value_string());
+            });
+            pair.append_child(sel);
+            box.append_child(pair);
+        }
+        count += 1l;
+    }
+    if (count > 0l) then {
+        row.append_child(box);
+    }
+} end function add_placeholder_settings
+
+function placeholder_changed(const string&: name, const string&: setting, const string&: value) -> void {
+    string: r = call("placeholder_set", tab2(module_open, tab3(name, setting, value)));
+    if (failed(r)) then {
+        set_text("mm-note", reason(r));
+    } else then {
+        set_text("mm-note", "");
+    }
+    update_module_chips();
+    update_module_preview();
+    update_module_grid();
+} end function placeholder_changed
+
 function update_module_chips() -> void {
     grove::Element: box = grove::get_by_id("mm-chips");
     clear(box);
     auto: rows = call("module_placeholders", module_open).split("\n");
+    long int: shown = 0l;
     for (long int: i = 0l; i < rows.size(); i += 1l) {
         auto: f = rows[i].split("\t");
         if (f.size() < 4l) then {
@@ -746,12 +854,15 @@ function update_module_chips() -> void {
         string: name = f[0];
         bool: on = f[2] == "1";
         string: need = f[3];
-        grove::Element: chip = el("text", "chip", "{" + name + "}");
+        grove::Element: row = placeholder_row("{" + name + "}", f[1]);
+        grove::Element: chip = row.child(0l).child(0l).child(0l);
         if (on) then {
-            chip.set_attribute("title", f[1]);
+            add_placeholder_settings(row, name);
         } else then {
+            row.add_class("off");
             chip.add_class("off");
             chip.set_attribute("title", need + " to use this");
+            row.append_child(el("div", "ph-need", need + " to use this"));
         }
         chip.on("click", [name, on, need](grove::Event&: e) -> void {
             if (on) then {
@@ -760,7 +871,11 @@ function update_module_chips() -> void {
                 set_text("mm-note", need + " to use {" + name + "}");
             }
         });
-        box.append_child(chip);
+        box.append_child(row);
+        shown += 1l;
+    }
+    if (shown == 0l) then {
+        box.append_child(el("div", "ph-row ph-desc", "This module has no placeholders of its own; its options change how every other module writes its values."));
     }
 } end function update_module_chips
 
@@ -799,14 +914,15 @@ function fill_status_chips() -> void {
             continue;
         }
         string: name = f[0];
-        grove::Element: chip = el("text", "chip", name);
+        string: desc = "";
         if (f.size() > 1l) then {
-            chip.set_attribute("title", f[1]);
+            desc = f[1];
         }
-        chip.on("click", [name](grove::Event&: e) -> void {
+        grove::Element: row = placeholder_row(name, desc);
+        row.child(0l).child(0l).child(0l).on("click", [name](grove::Event&: e) -> void {
             insert_status_placeholder(name);
         });
-        box.append_child(chip);
+        box.append_child(row);
     }
 } end function fill_status_chips
 
@@ -1120,3 +1236,597 @@ update_preview();
 update_bubble();
 fill_folders();
 build_params();
+
+
+function status_class(const string&: status) -> string {
+    if (status == "join me") then {
+        return "s-join";
+    } else if (status == "active") then {
+        return "s-active";
+    } else if (status == "ask me") then {
+        return "s-ask";
+    } else if (status == "busy") then {
+        return "s-busy";
+    }
+    return "s-offline";
+} end function status_class
+
+function activity_flags() -> string {
+    string: out = "";
+    auto: ids = "f-friends|f-joins|f-online|f-moves|f-status".split("|");
+    for (long int: i = 0l; i < ids.size(); i += 1l) {
+        if (grove::get_by_id(ids[i]).value_bool()) then {
+            out = out + "1";
+        } else then {
+            out = out + "0";
+        }
+    }
+    return out;
+} end function activity_flags
+
+function update_account() -> void {
+    auto: f = call("vrc_account", "").split("\t");
+    if (f.size() < 14l) then {
+        return;
+    }
+    string: state = f[0];
+    logged_in = state == "loggedin";
+    show("vrc-login-box", state == "loggedout" || state == "working");
+    show("vrc-code-box", state == "code");
+    show("vrc-approve-box", state == "approve");
+    show("vrc-out-box", state == "loggedin");
+    show("social-login", !logged_in);
+    if (state == "loggedin") then {
+        set_text("vrc-state", "Logged in as " + f[5]);
+    } else if (state == "working") then {
+        set_text("vrc-state", "Working...");
+    } else if (state == "code") then {
+        if (f[2] == "email") then {
+            set_text("vrc-state", "Check your email");
+        } else then {
+            set_text("vrc-state", "Two-factor code");
+        }
+    } else if (state == "approve") then {
+        set_text("vrc-state", "Approve this login on vrchat.com");
+    } else then {
+        set_text("vrc-state", "Not logged in");
+    }
+    set_text("vrc-message", f[1]);
+    set_text("vrc-device-code", f[3]);
+    grove::Element: dot = grove::get_by_id("me-dot");
+    dot.set_attribute("class", "status-dot " + status_class(f[6]));
+    if (logged_in) then {
+        set_text("me-name", f[5]);
+        if (f[8].empty()) then {
+            set_text("me-status", f[7]);
+        } else then {
+            set_text("me-status", f[7] + " \u{00B7} " + f[8]);
+        }
+        if (f[9] == "1") then {
+            set_text("me-live", "connected");
+        } else then {
+            set_text("me-live", "connecting...");
+        }
+    } else then {
+        dot.set_attribute("class", "status-dot s-offline");
+        set_text("me-name", "Not logged in");
+        set_text("me-status", "");
+        set_text("me-live", "-");
+        set_text("me-online", "-");
+        set_text("me-web", "-");
+    }
+    set_text("me-note", f[10]);
+    set_text("fav-note", f[10]);
+    if (f[11] != vrc_friends_rev) then {
+        vrc_friends_rev = f[11];
+        if (grove::get_by_id("social").is_current()) then {
+            build_friends();
+        }
+    }
+    if (!logged_in) then {
+        fav_loaded_kind = "";
+    } else if (grove::get_by_id("favorites").is_current() && fav_loaded_kind != grove::get_by_id("fav-kind").value_string()) then {
+        load_favorites();
+    }
+    if (f[12] != vrc_coll_rev) then {
+        vrc_coll_rev = f[12];
+        if (grove::get_by_id("favorites").is_current()) then {
+            build_favorites();
+        }
+    }
+    if (f[13] != vrc_act_seq && grove::get_by_id("social").is_current()) then {
+        update_activity(false);
+    }
+} end function update_account
+
+function update_world() -> void {
+    auto: rows = call("vrc_world", "").split("\n");
+    string: found = "0";
+    string: in_world = "0";
+    string: file = "";
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 2l) then {
+            continue;
+        }
+        string: k = f[0];
+        string: v = f[1];
+        if (k == "found") then {
+            found = v;
+        } else if (k == "file") then {
+            file = v;
+        } else if (k == "in_world") then {
+            in_world = v;
+        } else if (k == "world") then {
+            if (v.empty()) then {
+                set_text("w-name", "Not in a world");
+            } else then {
+                set_text("w-name", v);
+            }
+        } else if (k == "type") then {
+            set_text("w-type", dash(v));
+        } else if (k == "region") then {
+            set_text("w-region", dash(v));
+        } else if (k == "instance") then {
+            set_text("w-instance", dash(v));
+        } else if (k == "players") then {
+            set_text("w-players", v);
+        } else if (k == "since") then {
+            set_text("w-since", dash(v));
+        }
+    }
+    if (in_world != "1") then {
+        set_text("w-name", "Not in a world");
+    }
+    if (found != "1") then {
+        set_text("w-note", "Pollen hasn't found VRChat's log yet. It looks next to VRChat's OSC folder; set that folder in Settings if VRChat is somewhere unusual.");
+    } else then {
+        set_text("w-note", "Reading " + file);
+    }
+} end function update_world
+
+function build_players() -> void {
+    string: listing = call("vrc_players", "");
+    if (listing == players_shown) then {
+        return;
+    }
+    players_shown = listing;
+    grove::Element: box = grove::get_by_id("players");
+    clear(box);
+    auto: rows = listing.split("\n");
+    long int: n = 0l;
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 4l) then {
+            continue;
+        }
+        grove::Element: row = el("row", "person", "");
+        grove::Element: main = el("column", "person-main", "");
+        grove::Element: name = el("div", "person-name", f[0]);
+        if (f[2] == "1") then {
+            name.add_class("friend");
+        }
+        main.append_child(name);
+        if (f[2] == "1") then {
+            main.append_child(el("div", "person-sub", "Friend \u{00B7} here since " + f[3]));
+        } else then {
+            main.append_child(el("div", "person-sub", "Here since " + f[3]));
+        }
+        row.append_child(main);
+        box.append_child(row);
+        n += 1l;
+    }
+    if (n == 0l) then {
+        box.append_child(el("div", "empty-small", "Nobody yet. People show up here as VRChat logs them joining."));
+    }
+} end function build_players
+
+function update_activity(bool: reset) -> void {
+    grove::Element: box = grove::get_by_id("activity");
+    if (reset) then {
+        clear(box);
+        act_rows = 0l;
+        vrc_act_seq = "0";
+    }
+    auto: rows = call("vrc_activity", tab2(vrc_act_seq, activity_flags())).split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 5l) then {
+            continue;
+        }
+        vrc_act_seq = f[0];
+        if (f[3] != "1") then {
+            continue;
+        }
+        string: kind = f[2];
+        string: cls = "act-line";
+        if (kind == "removed") then {
+            cls = "act-line removed";
+        } else if (kind == "world") then {
+            cls = "act-line world";
+        } else if (kind != "join" && kind != "leave" && kind != "you") then {
+            cls = "act-line friend";
+        } else if (f[4].starts_with("Your friend")) then {
+            cls = "act-line friend";
+        }
+        if (act_rows == 0l) then {
+            clear(box);
+        }
+        grove::Element: line = el("row", cls, "");
+        line.append_child(el("text", "act-time", f[1]));
+        line.append_child(el("div", "act-text", f[4]));
+        box.append_child(line);
+        act_rows += 1l;
+        while (act_rows > 300l) {
+            box.child(0l).remove();
+            act_rows -= 1l;
+        }
+    }
+    if (act_rows == 0l && box.child_count() == 0l) then {
+        box.append_child(el("div", "empty-small", "Nothing yet. Joins, leaves and friend news show up here as they happen."));
+    }
+} end function update_activity
+
+function act_button(const string&: label, const string&: action, const string&: id, const string&: name) -> grove::Element {
+    grove::Element: b = el("button", "ghost small", label);
+    b.on("click", [action, id, name](grove::Event&: e) -> void {
+        friend_action(action, id, name);
+    });
+    return b;
+} end function act_button
+
+function confirm_act(const string&: title, const string&: message, const string&: args) -> void {
+    grove::confirm(title, message, [args](bool: yes) -> void {
+        if (yes) then {
+            call("vrc_act", args);
+        }
+    });
+} end function confirm_act
+
+function friend_action(const string&: action, const string&: id, const string&: name) -> void {
+    if (action == "unfriend") then {
+        confirm_act("Unfriend " + name, "Remove " + name + " from your VRChat friends? They won't be told, but you'll have to send a new friend request to undo it.", tab2("unfriend", id));
+        return;
+    }
+    call("vrc_act", tab2(action, id));
+} end function friend_action
+
+function build_friends() -> void {
+    grove::Element: box = grove::get_by_id("friend-list");
+    clear(box);
+    string: filter = grove::get_by_id("fr-filter").value_string();
+    auto: rows = call("vrc_friends", tab2(filter, friends_query)).split("\n");
+    long int: shown = 0l;
+    long int: online = 0l;
+    long int: web = 0l;
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 8l) then {
+            continue;
+        }
+        string: id = f[0];
+        string: name = f[1];
+        string: rank = f[2];
+        if (rank == "0" || rank == "1") then {
+            online += 1l;
+        } else if (rank == "2") then {
+            web += 1l;
+        }
+        if (shown >= 300l) then {
+            continue;
+        }
+        grove::Element: row = el("row", "person", "");
+        grove::Element: dot = el("text", "person-dot " + status_class(f[3]), "\u{25CF}");
+        row.append_child(dot);
+        grove::Element: main = el("column", "person-main", "");
+        string: title = name + "  \u{00B7}  " + f[4];
+        if (!f[5].empty()) then {
+            title = title + " \u{00B7} " + f[5];
+        }
+        main.append_child(el("div", "person-name", title));
+        string: sub = f[6];
+        if (!f[7].empty()) then {
+            sub = sub + " (" + f[7] + ")";
+        }
+        main.append_child(el("div", "person-sub", sub));
+        row.append_child(main);
+        grove::Element: actions = el("row", "person-actions", "");
+        if (rank == "1") then {
+            actions.append_child(act_button("Request invite", "request-invite", id, name));
+            actions.append_child(act_button("Invite here", "invite", id, name));
+        }
+        actions.append_child(act_button("Favorite", "fav-add-friend", id, name));
+        actions.append_child(act_button("Unfriend", "unfriend", id, name));
+        row.append_child(actions);
+        box.append_child(row);
+        shown += 1l;
+    }
+    if (logged_in) then {
+        set_text("me-online", online.to_string());
+        set_text("me-web", web.to_string());
+    }
+    if (shown == 0l) then {
+        if (logged_in) then {
+            box.append_child(el("div", "empty-small", "No friends match."));
+        } else then {
+            box.append_child(el("div", "empty-small", "Log in to VRChat under Settings to see your friends."));
+        }
+    }
+} end function build_friends
+
+function fav_row(const string&: kind, const string&: line, const string&: groups) -> grove::Element {
+    auto: f = line.split("\t");
+    string: id = f[0];
+    string: target = f[1];
+    string: name = f[2];
+    grove::Element: row = el("row", "fav-row", "");
+    if (f[6] == "1") then {
+        row.add_class("archived");
+    }
+    grove::Element: main = el("column", "fav-main", "");
+    main.append_child(el("div", "fav-name", name));
+    if (!f[3].empty()) then {
+        main.append_child(el("div", "fav-detail", f[3]));
+    }
+    row.append_child(main);
+    if (kind == "avatars" || kind == "worlds" || kind == "friends") then {
+        row.append_child(el("text", "fav-group", f[4]));
+        grove::Element: sel = grove::create_element("input_select");
+        sel.set_attribute("class", "fav-move");
+        grove::Element: first = grove::create_element("option");
+        first.set_attribute("value", "");
+        first.set_inner_text("Move to another group...");
+        sel.append_child(first);
+        auto: choices = groups.split("|");
+        for (long int: c = 0l; c < choices.size(); c += 1l) {
+            auto: kv = choices[c].split("=");
+            if (kv.size() < 2l || kv[0] == f[5]) then {
+                continue;
+            }
+            grove::Element: o = grove::create_element("option");
+            o.set_attribute("value", kv[0]);
+            o.set_inner_text("Move to " + kv[1]);
+            sel.append_child(o);
+        }
+        sel.set_attribute("value", "");
+        sel.on("change", [kind, id, target](grove::Event&: e) -> void {
+            string: to = e.target().value_string();
+            if (!to.empty()) then {
+                call("vrc_act", tab2("fav-move", tab2(kind, tab3(id, target, to))));
+            }
+        });
+        row.append_child(sel);
+        grove::Element: remove = el("button", "ghost small", "Remove");
+        remove.on("click", [kind, id, name](grove::Event&: e) -> void {
+            confirm_act("Remove favorite", "Remove " + name + " from your favorites?", tab3("fav-remove", id, kind));
+        });
+        row.append_child(remove);
+    } else if (f[7] == "1") then {
+        grove::Element: del = el("button", "ghost small", "Delete upload");
+        del.on("click", [kind, id, name](grove::Event&: e) -> void {
+            confirm_act("Delete " + name, "Delete your uploaded " + name + "? This can't be undone.", tab3("file-delete", id, kind));
+        });
+        row.append_child(del);
+    } else then {
+        string: archived = f[6];
+        string: label = "Archive";
+        string: to = "1";
+        if (archived == "1") then {
+            label = "Unarchive";
+            to = "0";
+        }
+        grove::Element: arch = el("button", "ghost small", label);
+        arch.on("click", [kind, id, to](grove::Event&: e) -> void {
+            call("vrc_act", tab2("inv-archive", tab3(id, to, kind)));
+        });
+        row.append_child(arch);
+        grove::Element: del = el("button", "ghost small", "Delete");
+        del.on("click", [kind, id, name](grove::Event&: e) -> void {
+            confirm_act("Delete " + name, "Delete " + name + " from your inventory? VRChat may not give it back.", tab3("inv-delete", id, kind));
+        });
+        row.append_child(del);
+    }
+    return row;
+} end function fav_row
+
+function build_favorites() -> void {
+    grove::Element: box = grove::get_by_id("fav-list");
+    clear(box);
+    string: kind = grove::get_by_id("fav-kind").value_string();
+    string: fav_type = "friend";
+    if (kind == "avatars") then {
+        fav_type = "avatar";
+    } else if (kind == "worlds") then {
+        fav_type = "world";
+    }
+    string: groups = call("vrc_groups", fav_type);
+    string: archived = "0";
+    if (grove::get_by_id("fav-archived").value_bool()) then {
+        archived = "1";
+    }
+    auto: rows = call("vrc_collection", tab3(kind, grove::get_by_id("fav-filter").value_string(), archived)).split("\n");
+    long int: shown = 0l;
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 8l) then {
+            continue;
+        }
+        box.append_child(fav_row(kind, rows[i], groups));
+        shown += 1l;
+    }
+    set_text("fav-status", call("vrc_collection_status", kind));
+    if (shown == 0l) then {
+        if (!logged_in) then {
+            box.append_child(el("p", "empty", "Log in to VRChat under Settings to manage your favorites and inventory."));
+        } else then {
+            box.append_child(el("p", "empty", "Nothing here. Press Reload if you just changed something in VRChat."));
+        }
+    }
+} end function build_favorites
+
+function load_favorites() -> void {
+    if (!logged_in) then {
+        build_favorites();
+        return;
+    }
+    fav_loaded_kind = grove::get_by_id("fav-kind").value_string();
+    call("vrc_load", fav_loaded_kind);
+    set_text("fav-status", "Loading...");
+} end function load_favorites
+
+function update_social() -> void {
+    update_world();
+    build_players();
+} end function update_social
+
+grove::get_by_id("vrc-login").on("click", [](grove::Event&: e) -> void {
+    string: r = call("vrc_login", tab2(grove::get_by_id("vrc-user").value_string().trim(), grove::get_by_id("vrc-pass").value_string()));
+    grove::get_by_id("vrc-pass").set_value_string("");
+    if (failed(r)) then {
+        set_text("vrc-message", reason(r));
+    }
+    update_account();
+});
+
+grove::get_by_id("vrc-code-login").on("click", [](grove::Event&: e) -> void {
+    call("vrc_login_code", "");
+    update_account();
+});
+
+grove::get_by_id("vrc-verify").on("click", [](grove::Event&: e) -> void {
+    call("vrc_verify", grove::get_by_id("vrc-code").value_string());
+    grove::get_by_id("vrc-code").set_value_string("");
+    update_account();
+});
+
+grove::get_by_id("vrc-code").on("key_down", [](grove::Event&: e) -> void {
+    if (e.key() == "Enter") then {
+        call("vrc_verify", e.target().value_string());
+        e.target().set_value_string("");
+        update_account();
+    }
+});
+
+grove::get_by_id("vrc-cancel-code").on("click", [](grove::Event&: e) -> void {
+    call("vrc_cancel", "");
+    update_account();
+});
+
+grove::get_by_id("vrc-cancel-approve").on("click", [](grove::Event&: e) -> void {
+    call("vrc_cancel", "");
+    update_account();
+});
+
+grove::get_by_id("vrc-open").on("click", [](grove::Event&: e) -> void {
+    string: r = call("vrc_open_login", "");
+    if (failed(r)) then {
+        set_text("vrc-message", reason(r));
+    }
+});
+
+grove::get_by_id("vrc-copy").on("click", [](grove::Event&: e) -> void {
+    string: r = call("vrc_copy_login", "");
+    if (failed(r)) then {
+        set_text("vrc-message", reason(r));
+    } else then {
+        set_text("vrc-message", "Copied. Paste it into a browser where you're logged in to vrchat.com");
+    }
+});
+
+grove::get_by_id("vrc-logout").on("click", [](grove::Event&: e) -> void {
+    grove::confirm("Log out", "Log Pollen out of VRChat? You'll need your password and two-factor code to log back in.", [](bool: yes) -> void {
+        if (yes) then {
+            call("vrc_logout", "");
+            update_account();
+        }
+    });
+});
+
+grove::get_by_id("me-refresh").on("click", [](grove::Event&: e) -> void {
+    call("vrc_refresh", "");
+    set_text("me-note", "Refreshing...");
+});
+
+grove::get_by_id("act-clear").on("click", [](grove::Event&: e) -> void {
+    call("vrc_activity_clear", "");
+    update_activity(true);
+});
+
+grove::get_by_id("f-friends").on("change", [](grove::Event&: e) -> void {
+    update_activity(true);
+});
+
+grove::get_by_id("f-joins").on("change", [](grove::Event&: e) -> void {
+    update_activity(true);
+});
+
+grove::get_by_id("f-online").on("change", [](grove::Event&: e) -> void {
+    update_activity(true);
+});
+
+grove::get_by_id("f-moves").on("change", [](grove::Event&: e) -> void {
+    update_activity(true);
+});
+
+grove::get_by_id("f-status").on("change", [](grove::Event&: e) -> void {
+    update_activity(true);
+});
+
+grove::get_by_id("fr-search").on("key_down", [](grove::Event&: e) -> void {
+    friends_query = e.target().value_string();
+    build_friends();
+});
+
+grove::get_by_id("fr-search").on("change", [](grove::Event&: e) -> void {
+    friends_query = e.target().value_string();
+    build_friends();
+});
+
+grove::get_by_id("fr-filter").on("change", [](grove::Event&: e) -> void {
+    build_friends();
+});
+
+grove::get_by_id("social").on("page_show", [](grove::Event&: e) -> void {
+    update_account();
+    update_social();
+    build_friends();
+    update_activity(true);
+});
+
+grove::get_by_id("favorites").on("page_show", [](grove::Event&: e) -> void {
+    update_account();
+    load_favorites();
+    build_favorites();
+});
+
+grove::get_by_id("fav-kind").on("change", [](grove::Event&: e) -> void {
+    load_favorites();
+    build_favorites();
+});
+
+grove::get_by_id("fav-refresh").on("click", [](grove::Event&: e) -> void {
+    load_favorites();
+});
+
+grove::get_by_id("fav-filter").on("change", [](grove::Event&: e) -> void {
+    build_favorites();
+});
+
+grove::get_by_id("fav-filter").on("key_down", [](grove::Event&: e) -> void {
+    build_favorites();
+});
+
+grove::get_by_id("fav-archived").on("change", [](grove::Event&: e) -> void {
+    build_favorites();
+});
+
+update_account();
+
+grove::set_interval(1000.0, []() -> void {
+    if (grove::get_by_id("settings").is_current() || grove::get_by_id("social").is_current() || grove::get_by_id("favorites").is_current()) then {
+        update_account();
+    }
+    if (grove::get_by_id("social").is_current()) then {
+        update_social();
+    }
+});

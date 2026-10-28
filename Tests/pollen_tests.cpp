@@ -577,8 +577,82 @@ static void test_modules() {
     CHECK(v["ram_used"] == "38%" && v["ram_app"] == "1%" && v["ram_total"] == "16384 MB");
     CHECK(v["gpu_used"] == "1024 MB");
     CHECK(v["cpu_temp"] == "130\xc2\xb0" "F");
+    CHECK(set_option(o, "units", "temp_also", "C"));
+    v = all_module_values(o, in);
+    CHECK(v["cpu_temp"] == "130\xc2\xb0" "F (55\xc2\xb0" "C)");
+    CHECK(set_option(o, "units", "temp_unit", "C"));
+    CHECK(set_option(o, "units", "temp_also", "F"));
+    CHECK(set_option(o, "units", "both_style", "slash"));
+    CHECK(set_option(o, "units", "temp_decimals", "1"));
+    v = all_module_values(o, in);
+    CHECK(v["cpu_temp"] == "54.6\xc2\xb0" "C / 130.3\xc2\xb0" "F");
+    CHECK(set_option(o, "units", "temp_also", "C"));
+    v = all_module_values(o, in);
+    CHECK(v["cpu_temp"] == "54.6\xc2\xb0" "C");
+    CHECK(!set_option(o, "units", "temp_also", "R"));
+    Units minus;
+    CHECK(format_temp(-0.3, minus) == "0\xc2\xb0" "C");
+    CHECK(set_option(o, "units", "temp_unit", "F"));
+    CHECK(set_option(o, "units", "temp_also", "none"));
+    CHECK(set_option(o, "units", "both_style", "paren"));
+    CHECK(set_option(o, "units", "temp_decimals", "0"));
+    v = all_module_values(o, in);
     CHECK(v["uptime"] == "1 day, 2 hours, 3 minutes, 4 seconds");
     CHECK(!v["tai"].empty() && v["tai"] != v["utc"]);
+
+    ModuleOptions each;
+    CHECK(set_option(each, "gpu", "gpu_used.percent", "1"));
+    CHECK(set_option(each, "gpu", "gpu_total.unit", "MB"));
+    CHECK(set_option(each, "cpu", "cpu_temp.unit", "F"));
+    CHECK(set_option(each, "cpu", "cpu_temp.also", "C"));
+    CHECK(set_option(each, "cpu", "cpu_clock.unit", "MHz"));
+    CHECK(!set_option(each, "gpu", "gpu_used.unit", "XB"));
+    CHECK(!set_option(each, "gpu", "gpu_name.unit", "GB"));
+    CHECK(!set_option(each, "gpu", "gpu_total.percent", "1"));
+    v = all_module_values(each, in);
+    CHECK(v["gpu_used"] == "8%");
+    CHECK(v["gpu_total"] == "12288.0 MB");
+    CHECK(v["gpu"].empty());
+    CHECK(v["ram_used"] == "6.0 GB");
+    CHECK(v["cpu_temp"] == "130\xc2\xb0" "F (55\xc2\xb0" "C)");
+    CHECK(v["cpu_clock"] == "4210 MHz");
+    CHECK(set_option(each, "units", "temp_unit", "K"));
+    v = all_module_values(each, in);
+    CHECK(v["cpu_temp"] == "130\xc2\xb0" "F (55\xc2\xb0" "C)");
+    CHECK(set_option(each, "cpu", "cpu_temp.unit", "default"));
+    v = all_module_values(each, in);
+    CHECK(v["cpu_temp"] == "328 K (55\xc2\xb0" "C)");
+    const ModuleDef* gpu = find_module("gpu");
+    const PlaceholderDef* used = gpu ? find_placeholder(*gpu, "gpu_used") : nullptr;
+    CHECK(used && visible_placeholder_settings(each, *gpu, *used).size() == 1);
+    CHECK(set_option(each, "gpu", "gpu_used.percent", "0"));
+    CHECK(used && visible_placeholder_settings(each, *gpu, *used).size() == 2);
+    CHECK(used && placeholder_default(each, *gpu, *used, "unit") == "auto");
+    CHECK(option_value(each, "gpu", "gpu_free.unit") == "default");
+    CHECK(set_option(each, "vram", "percent", "1"));
+    v = all_module_values(each, in);
+    CHECK(v["vram_used"] == "8%" && v["vram_total"] == "12.0 GB");
+
+    CHECK(format_offset(-18000, "auto", "named", "UTC") == "UTC-5");
+    CHECK(format_offset(19800, "auto", "named", "UTC") == "UTC+5:30");
+    CHECK(format_offset(-18037, "auto", "named", "TAI") == "TAI-5:00:37");
+    CHECK(format_offset(-18037, "hours", "bare", "TAI") == "-5");
+    CHECK(format_offset(19800, "hours", "bare", "UTC") == "+6");
+    CHECK(format_offset(-18000, "minutes", "padded", "UTC") == "-05:00");
+    CHECK(format_offset(-18000, "seconds", "named_padded", "GMT") == "GMT-05:00:00");
+    CHECK(format_offset(0, "auto", "named", "UTC") == "UTC+0");
+    ModuleOptions offsets;
+    CHECK(set_option(offsets, "time", "offset", "1"));
+    CHECK(set_option(offsets, "time", "tai_offset.precision", "seconds"));
+    v = all_module_values(offsets, in);
+    const long long here = utc_offset_seconds(std::chrono::system_clock::to_time_t(in.now));
+    CHECK(v["utc_offset"] == format_offset(here, "auto", "named", "UTC"));
+    CHECK(v["gmt_offset"] == format_offset(here, "auto", "named", "GMT"));
+    CHECK(v["tai_offset"] == format_offset(here - 37, "seconds", "named", "TAI"));
+    CHECK(set_option(offsets, "time", "offset_precision", "minutes"));
+    v = all_module_values(offsets, in);
+    CHECK(v["utc_offset"] == format_offset(here, "minutes", "named", "UTC"));
+    CHECK(v["tai_offset"] == format_offset(here - 37, "seconds", "named", "TAI"));
 
     const auto enabled = enabled_placeholders(o);
     CHECK(std::find(enabled.begin(), enabled.end(), "ram_app") != enabled.end());
@@ -636,6 +710,23 @@ static void test_weather_parsing() {
     CHECK(v["weather_temp"] == "54\xc2\xb0" "F");
     CHECK(v["weather_wind"] == "11 mph");
     CHECK(v.count("weather_place") == 0);
+
+    set_option(o, "units", "temp_also", "C");
+    set_option(o, "weather", "wind_also", "kmh");
+    module_values(*find_module("weather"), o, in, v);
+    CHECK(v["weather_temp"] == "54\xc2\xb0" "F (12\xc2\xb0" "C)");
+    CHECK(v["weather_wind"] == "11 mph (18 km/h)");
+    set_option(o, "weather", "wind_unit", "ms");
+    set_option(o, "weather", "wind_also", "fts");
+    set_option(o, "weather", "wind_decimals", "1");
+    set_option(o, "units", "both_style", "slash");
+    module_values(*find_module("weather"), o, in, v);
+    CHECK(v["weather_wind"] == "5.0 m/s / 16.4 ft/s");
+    CHECK(format_speed(18.0, "kn", 1) == "9.7 kn");
+    CHECK(format_speed(18.0, "kmh", 0) == "18 km/h");
+    const ModuleDef* weather = find_module("weather");
+    const OptionDef* also = weather ? find_option(*weather, "wind_also") : nullptr;
+    CHECK(also && !option_visible(ModuleOptions{}, *weather, *also));
 }
 
 static void test_rotation_without_sending() {
@@ -703,6 +794,165 @@ static void test_weather_fetch() {
     server.close();
 }
 
+static void test_vrchat_log() {
+    using namespace pollen;
+    namespace fs = std::filesystem;
+    LocationInfo a = parse_location("wrld_4432ea9b-729c-46e3-8eaf-846aa0a37fdd:12345~hidden(usr_aaa)~region(eu)");
+    CHECK(a.valid && a.world_id == "wrld_4432ea9b-729c-46e3-8eaf-846aa0a37fdd" && a.instance == "12345");
+    CHECK(a.access == "friends_plus" && a.owner_id == "usr_aaa" && region_label(a.region) == "Europe");
+    CHECK(access_label(parse_location("wrld_x:1~private(usr_b)~canRequestInvite~region(us)").access) == "Invite+");
+    CHECK(access_label(parse_location("wrld_x:1~private(usr_b)~region(use)").access) == "Invite");
+    CHECK(access_label(parse_location("wrld_x:1~friends(usr_b)").access) == "Friends");
+    CHECK(access_label(parse_location("wrld_x:1~group(grp_1)~groupAccessType(plus)~region(jp)").access) == "Group+");
+    CHECK(access_label(parse_location("wrld_x:1~group(grp_1)~groupAccessType(public)").access) == "Group Public");
+    CHECK(access_label(parse_location("wrld_x:Bunny~region(us)").access) == "Public");
+    CHECK(region_label(parse_location("wrld_x:1").region) == "US West");
+    CHECK(!parse_location("private").valid && parse_location("private").special == "private");
+    CHECK(parse_location("traveling:traveling").special == "traveling");
+    CHECK(location_label(parse_location("offline")) == "Offline");
+
+    const auto t = parse_log_time("2026.10.28 14:03:12 Debug      -  [Behaviour] OnLeftRoom");
+    CHECK(t.has_value());
+    auto e = parse_log_line("2026.10.28 14:03:12 Debug      -  [Behaviour] Joining wrld_abc:777~friends(usr_me)~region(eu)\r");
+    CHECK(e && e->kind == LogKind::Joining && e->text == "wrld_abc:777~friends(usr_me)~region(eu)" && e->has_time);
+    e = parse_log_line("2026.10.28 14:03:13 Debug      -  [Behaviour] Joining or Creating Room: The Black Cat");
+    CHECK(e && e->kind == LogKind::Entering && e->text == "The Black Cat");
+    e = parse_log_line("2026.10.28 14:03:13 Log        -  [Behaviour] Entering Room: The Black Cat");
+    CHECK(e && e->kind == LogKind::Entering && e->text == "The Black Cat");
+    e = parse_log_line("2026.10.28 14:03:20 Debug      -  [Behaviour] OnPlayerJoined Some Name (usr_123)");
+    CHECK(e && e->kind == LogKind::PlayerJoined && e->text == "Some Name" && e->user_id == "usr_123");
+    e = parse_log_line("2026.10.28 14:03:21 Debug      -  [Behaviour] OnPlayerJoined Old Style");
+    CHECK(e && e->text == "Old Style" && e->user_id.empty());
+    e = parse_log_line("2026.10.28 14:05:00 Debug      -  [Behaviour] OnPlayerLeft Some Name (usr_123)");
+    CHECK(e && e->kind == LogKind::PlayerLeft && e->user_id == "usr_123");
+    CHECK(!parse_log_line("2026.10.28 14:05:00 Debug      -  [Behaviour] OnPlayerLeftRoom"));
+    CHECK(!parse_log_line("2026.10.28 14:05:00 Debug      -  [Network] something else"));
+
+    const fs::path dir = fs::temp_directory_path() / "pollen-vrclog-test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    const fs::path file = dir / "output_log_2026-10-28_14-00-00.txt";
+    {
+        std::ofstream out(file);
+        out << "2026.10.28 14:03:12 Debug      -  [Behaviour] Joining wrld_abc:777~hidden(usr_me)~region(use)\n";
+        out << "2026.10.28 14:03:13 Debug      -  [Behaviour] Joining or Creating Room: The Black Cat\n";
+        out << "2026.10.28 14:03:20 Debug      -  [Behaviour] OnPlayerJoined Me (usr_me)\n";
+        out << "2026.10.28 14:03:21 Debug      -  [Behaviour] OnPlayerJoined Alex (usr_alex)\n";
+    }
+    VrchatLog log;
+    log.set_folders({ dir });
+    CHECK(log.poll().empty());
+    CHECK(log.found() && log.world().in_world && log.world().world_name == "The Black Cat");
+    CHECK(log.world().players.size() == 2 && log.world().info.access == "friends_plus");
+    {
+        std::ofstream out(file, std::ios::app);
+        out << "2026.10.28 14:04:00 Debug      -  [Behaviour] OnPlayerLeft Alex (usr_alex)\n";
+        out << "2026.10.28 14:04:01 Debug      -  [Behaviour] OnPlayerJoined Sam (usr_s";
+    }
+    auto fresh = log.poll();
+    CHECK(fresh.size() == 1 && fresh[0].kind == LogKind::PlayerLeft && log.world().players.size() == 1);
+    {
+        std::ofstream out(file, std::ios::app);
+        out << "am)\n2026.10.28 14:06:00 Debug      -  [Behaviour] OnLeftRoom\n";
+    }
+    fresh = log.poll();
+    CHECK(fresh.size() == 2 && fresh[0].user_id == "usr_sam" && !log.world().in_world && log.world().players.empty());
+    fs::remove_all(dir, ec);
+
+    ModuleOptions o;
+    ModuleInputs in;
+    in.world.in_world = true;
+    in.world.world_name = "The Black Cat";
+    in.world.info = parse_location("wrld_abc:777~hidden(usr_me)~region(eu)");
+    in.world.players = { { "Me", "usr_me", in.now }, { "Alex", "usr_alex", in.now } };
+    in.world.entered = in.now - std::chrono::minutes(62);
+    StatusValues v;
+    module_values(*find_module("world"), o, in, v);
+    CHECK(v["world"] == "The Black Cat" && v["world_type"] == "Friends+" && v["players"] == "2" && v["world_time"] == "1h 2m");
+    CHECK(v.count("world_region") == 0);
+    set_option(o, "world", "region", "1");
+    module_values(*find_module("world"), o, in, v);
+    CHECK(v["world_region"] == "Europe");
+}
+
+static void test_friend_book() {
+    using namespace pollen;
+    CHECK(base64_encode("user:pa ss") == "dXNlcjpwYSBzcw==");
+    CHECK(base64_encode("ab") == "YWI=" && base64_encode("abc") == "YWJj");
+    CHECK(form_encode("a b@c") == "a%20b%40c");
+    CHECK(status_label("busy") == "Do Not Disturb" && status_color("ask me") == "Orange" && status_label("join me") == "Join Me");
+
+    FriendBook book;
+    book.set_world_namer([](const std::string& id) { return id == "wrld_cat" ? std::string("The Black Cat") : std::string(); });
+    VrcUser alex;
+    alex.id = "usr_alex";
+    alex.name = "Alex";
+    alex.status = "active";
+    alex.state = "online";
+    alex.location = "private";
+    VrcUser sam;
+    sam.id = "usr_sam";
+    sam.name = "Sam";
+    sam.state = "offline";
+    std::vector<SocialEvent> events;
+    book.replace_all({ alex, sam }, {}, events);
+    CHECK(events.empty() && book.friends().size() == 2);
+
+    VrcUser me;
+    me.id = "usr_me";
+    me.status = "active";
+    CHECK(book.apply_pipeline("{\"type\":\"friend-location\",\"content\":\"{\\\"userId\\\":\\\"usr_alex\\\",\\\"location\\\":\\\"wrld_cat:1~hidden(usr_x)~region(us)\\\",\\\"user\\\":{\\\"displayName\\\":\\\"Alex\\\"}}\"}", me, events));
+    CHECK(events.size() == 1 && events[0].kind == "location" && events[0].text == "Alex went to The Black Cat (Friends+)");
+    CHECK(book.find("usr_alex")->last_public_location == "wrld_cat:1~hidden(usr_x)~region(us)");
+    events.clear();
+    book.apply_pipeline("{\"type\":\"friend-location\",\"content\":{\"userId\":\"usr_alex\",\"location\":\"private\"}}", me, events);
+    CHECK(events.size() == 1 && events[0].text == "Alex went to a private world");
+    CHECK(book.find("usr_alex")->last_public_location == "wrld_cat:1~hidden(usr_x)~region(us)" && book.find("usr_alex")->location_since_known);
+    events.clear();
+    book.apply_pipeline("{\"type\":\"friend-update\",\"content\":\"{\\\"userId\\\":\\\"usr_alex\\\",\\\"user\\\":{\\\"status\\\":\\\"busy\\\",\\\"statusDescription\\\":\\\"\\\"}}\"}", me, events);
+    CHECK(events.size() == 1 && events[0].text == "Alex is now Do Not Disturb");
+    events.clear();
+    book.apply_pipeline("{\"type\":\"friend-online\",\"content\":{\"userId\":\"usr_sam\",\"location\":\"private\",\"platform\":\"android\",\"user\":{\"displayName\":\"Sam\"}}}", me, events);
+    CHECK(events.size() == 1 && events[0].text == "Sam is online" && book.find("usr_sam")->state == "online");
+    events.clear();
+    book.apply_pipeline("{\"type\":\"friend-offline\",\"content\":{\"userId\":\"usr_sam\",\"platform\":\"\"}}", me, events);
+    CHECK(events.size() == 1 && events[0].text == "Sam went offline");
+    events.clear();
+    book.apply_pipeline("{\"type\":\"friend-delete\",\"content\":{\"userId\":\"usr_sam\"}}", me, events);
+    CHECK(events.size() == 1 && events[0].kind == "removed" && !book.is_friend("usr_sam"));
+    events.clear();
+    book.apply_pipeline("{\"type\":\"user-update\",\"content\":{\"userId\":\"usr_me\",\"user\":{\"status\":\"ask me\",\"statusDescription\":\"\"}}}", me, events);
+    CHECK(me.status == "ask me" && events.size() == 1 && events[0].text == "Your status is now Ask Me");
+    events.clear();
+    book.apply_pipeline("{\"type\":\"notification\",\"content\":{\"type\":\"friendRequest\",\"senderUserId\":\"usr_new\",\"senderUsername\":\"Newbie\"}}", me, events);
+    CHECK(events.size() == 1 && events[0].kind == "request");
+    CHECK(!book.apply_pipeline("not json", me, events));
+
+    events.clear();
+    VrcUser kim;
+    kim.id = "usr_kim";
+    kim.name = "Kim";
+    book.replace_all({ *book.find("usr_alex"), kim }, { { "usr_alex", "Alex" }, { "usr_gone", "Gone" } }, events);
+    CHECK(events.size() == 2);
+    CHECK(events[0].kind == "removed" && events[0].name == "Gone" && events[1].kind == "added" && events[1].name == "Kim");
+    CHECK(book.find("usr_alex")->last_public_location == "wrld_cat:1~hidden(usr_x)~region(us)");
+
+    ModuleOptions o;
+    ModuleInputs in;
+    StatusValues v;
+    module_values(*find_module("friends"), o, in, v);
+    CHECK(v["status"].empty() && v["friends_online"].empty());
+    in.account.state = LoginState::LoggedIn;
+    in.account.me.status = "join me";
+    in.friends_online = 4;
+    in.friends_here = { "Alex", "Kim", "Sam", "Jo" };
+    set_option(o, "friends", "here", "1");
+    module_values(*find_module("friends"), o, in, v);
+    CHECK(v["status"] == "Join Me" && v["status_color"] == "Blue" && v["friends_online"] == "4");
+    CHECK(v["friends_here"] == "4" && v["friends_here_names"] == "Alex, Kim, Sam +1");
+}
+
 int main() {
     test_spec_examples();
     test_round_trip();
@@ -722,6 +972,8 @@ int main() {
     test_fake_linux_sensors();
     test_modules();
     test_weather_parsing();
+    test_vrchat_log();
+    test_friend_book();
     test_rotation_without_sending();
     test_weather_fetch();
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
