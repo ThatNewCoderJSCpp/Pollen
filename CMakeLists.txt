@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(pollen VERSION 0.1.2 DESCRIPTION "Pollen: a VRChat OSC app for Linux, Windows and macOS built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
+project(pollen VERSION 0.1.3 DESCRIPTION "Pollen: a VRChat OSC app for Linux, Windows and macOS built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)

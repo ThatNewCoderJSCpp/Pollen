@@ -76,6 +76,7 @@ public:
     std::string status_preview();
     bool send_status_now();
     StatusValues status_values();
+    std::string placeholder_problems(const std::string& text) const;
 
     std::vector<ParamRow> parameters() const;
     std::uint64_t parameter_revision() const noexcept { return m_connection.avatar().revision(); }

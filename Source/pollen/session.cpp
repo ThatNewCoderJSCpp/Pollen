@@ -464,7 +464,19 @@ void Session::set_status_template(const std::string& text) {
 }
 
 StatusValues Session::status_values() {
-    return all_module_values(m_settings.modules, module_inputs());
+    const ModuleInputs in = module_inputs();
+    StatusValues values = all_module_values(m_settings.modules, in);
+    add_modified_values(m_settings.status_template, m_settings.modules, in, values);
+    return values;
+}
+
+std::string Session::placeholder_problems(const std::string& text) const {
+    StatusValues values;
+    std::vector<std::string> problems;
+    add_modified_values(text, m_settings.modules, ModuleInputs(), values, &problems);
+    std::string out;
+    for (const std::string& p : problems) out += (out.empty() ? "" : "\n") + p;
+    return out;
 }
 
 double Session::connected_seconds() const {
@@ -504,8 +516,10 @@ std::string Session::module_preview(const std::string& module, const std::string
     const ModuleDef* def = find_module(module);
     if (!def) return std::string();
     StatusValues values;
-    if (module == "units") values = all_module_values(m_settings.modules, module_inputs());
-    else module_values(*def, m_settings.modules, module_inputs(), values);
+    const ModuleInputs in = module_inputs();
+    if (module == "units") values = all_module_values(m_settings.modules, in);
+    else module_values(*def, m_settings.modules, in, values);
+    add_modified_values(text, m_settings.modules, in, values);
     return render_status(text, values);
 }
 

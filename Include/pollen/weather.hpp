@@ -51,6 +51,9 @@ std::string weather_condition(int code);
 std::string weather_icon(int code, bool is_day);
 std::string url_encode(const std::string& text);
 std::optional<Place> parse_geocode(const std::string& json, const std::string& query, std::string* error = nullptr);
+std::string coordinate_text(double value);
+std::string geocode_query_name(const std::string& query);
+std::string geocode_country(const std::string& query);
 std::optional<WeatherSnapshot> parse_forecast(const std::string& json, std::string* error = nullptr);
 
 class Weather {

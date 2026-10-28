@@ -112,6 +112,11 @@ std::string render_status(const std::string& page, const StatusValues& values, s
             if (c == '{') {
                 std::size_t j = i + 1;
                 while (j < line.size() && name_char(line[j])) ++j;
+                if (j < line.size() && line[j] == ':' && j > i + 1) {
+                    const std::size_t close = line.find('}', j);
+                    const std::size_t inner = line.find('{', j);
+                    if (close != std::string::npos && (inner == std::string::npos || inner > close)) j = close;
+                }
                 if (j < line.size() && line[j] == '}' && j > i + 1) {
                     const std::string name = line.substr(i + 1, j - i - 1);
                     ++placeholders;

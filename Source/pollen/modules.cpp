@@ -1,5 +1,6 @@
 #include "pollen/modules.hpp"
 
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -146,7 +147,7 @@ std::vector<ModuleDef> build_defs() {
             toggle("threads", "Thread count", false),
         };
         m.placeholders = {
-            ph("cpu", "CPU load: how busy the processor is right now, as a percentage", ""),
+            ph("cpu", "CPU load: how busy the processor is right now, as a percentage", "", "percent"),
             ph("cpu_clock", "the processor's current clock speed", "clock", "clock"),
             ph("cpu_name", "the processor's name", "name"),
             ph("cpu_temp", "the processor's temperature", "temp", "temp"),
@@ -173,7 +174,7 @@ std::vector<ModuleDef> build_defs() {
             toggle("vrchat", "Video memory VRChat uses", false),
         };
         m.placeholders = {
-            ph("gpu", "GPU load: how busy the graphics card is right now, as a percentage. This is not memory; use {gpu_used} for that", ""),
+            ph("gpu", "GPU load: how busy the graphics card is right now, as a percentage. This is not memory; use {gpu_used} for that", "", "percent"),
             ph("gpu_name", "the graphics card's name", "name"),
             ph("gpu_temp", "the graphics card's temperature", "temp", "temp"),
             ph("gpu_clock", "the graphics card's current clock speed", "clock", "clock"),
@@ -198,7 +199,7 @@ std::vector<ModuleDef> build_defs() {
             toggle("vrchat", "Memory VRChat uses", false),
         };
         m.placeholders = {
-            ph("ram", "share of memory (RAM) in use, as a percentage. {ram_used} is the same thing in GB", ""),
+            ph("ram", "share of memory (RAM) in use, as a percentage. {ram_used} is the same thing in GB", "", "percent"),
             { "ram_used", "memory (RAM) in use by everything on the computer", "", "bytes", true },
             ph("ram_total", "memory (RAM) installed", "", "bytes"),
             { "ram_free", "memory (RAM) still free", "free", "bytes", true },
@@ -220,7 +221,7 @@ std::vector<ModuleDef> build_defs() {
             toggle("vrchat", "Video memory VRChat uses", false),
         };
         m.placeholders = {
-            ph("vram", "share of video memory (VRAM) in use, as a percentage. {vram_used} is the same thing in GB", ""),
+            ph("vram", "share of video memory (VRAM) in use, as a percentage. {vram_used} is the same thing in GB", "", "percent"),
             { "vram_used", "video memory (VRAM) in use by everything on the computer. Same as {gpu_used}", "", "bytes", true },
             ph("vram_total", "video memory (VRAM) the card has", "", "bytes"),
             { "vram_free", "video memory (VRAM) still free", "free", "bytes", true },
@@ -345,7 +346,7 @@ std::vector<ModuleDef> build_defs() {
         m.description = "The weather for a city or a latitude and longitude, from Open-Meteo";
         m.options = {
             choice("mode", "Find the place by", "city", { { "city", "City" }, { "coordinates", "Latitude and longitude" } }),
-            when(text("city", "City", "", "Add a state or country after a comma if the name is common, like Springfield, Illinois"), "mode=city"),
+            when(text("city", "City", "", "Add a state, province or country after a comma if the name is common, like Springfield, IL or London, Canada or Paris, France"), "mode=city"),
             when(number("latitude", "Latitude", OptionKind::Float, "0", -90, 90), "mode=coordinates"),
             when(number("longitude", "Longitude", OptionKind::Float, "0", -180, 180), "mode=coordinates"),
             choice("wind_unit", "Wind in (default)", "kmh", speed_units()),
@@ -362,7 +363,7 @@ std::vector<ModuleDef> build_defs() {
             ph("weather_condition", "clear, rain, snow and so on", ""),
             ph("weather_icon", "a weather emoji", ""),
             ph("weather_feels", "what the temperature feels like, counting wind and humidity", "feels", "temp"),
-            ph("weather_humidity", "relative humidity, as a percentage", "humidity"),
+            ph("weather_humidity", "relative humidity, as a percentage", "humidity", "percent"),
             ph("weather_wind", "wind speed", "wind", "speed"),
             ph("weather_place", "the place it's for", "place"),
         };
@@ -553,6 +554,7 @@ std::string placeholder_key(const std::string& placeholder, const std::string& s
 std::vector<OptionDef> placeholder_settings(const ModuleDef&, const PlaceholderDef& placeholder) {
     std::vector<OptionDef> out;
     if (placeholder.percent) out.push_back(toggle("percent", "As a percentage", false, "Show it as a share of the total instead of an amount"));
+    const Choices decimals = { { "0", "0" }, { "1", "1" }, { "2", "2" }, { "3", "3" } };
     if (placeholder.units == "bytes") {
         out.push_back(choice("unit", "Unit", "default", with_default(byte_units())));
     } else if (placeholder.units == "temp") {
@@ -566,7 +568,19 @@ std::vector<OptionDef> placeholder_settings(const ModuleDef&, const PlaceholderD
     } else if (placeholder.units == "offset") {
         out.push_back(choice("precision", "Shows", "default", with_default(offset_precisions())));
     }
+    if (placeholder.units == "bytes" || placeholder.units == "temp" || placeholder.units == "speed" || placeholder.units == "percent" || placeholder.percent) {
+        out.push_back(choice("decimals", "Decimals", "default", with_default(decimals)));
+    }
     return out;
+}
+
+std::string placeholder_raw(const ModuleOptions& options, const ModuleDef& module, const PlaceholderDef& placeholder, const std::string& setting) {
+    const auto m = options.find(module.id);
+    if (m != options.end()) {
+        const auto o = m->second.find(placeholder_key(placeholder.name, setting));
+        if (o != m->second.end() && !o->second.empty()) return o->second;
+    }
+    return "default";
 }
 
 std::string placeholder_default(const ModuleOptions& options, const ModuleDef& module, const PlaceholderDef& placeholder, const std::string& setting) {
@@ -579,6 +593,12 @@ std::string placeholder_default(const ModuleOptions& options, const ModuleDef& m
     if (kind == "speed" && setting == "also") return option_value(options, module.id, "wind_also");
     if (kind == "clock" && setting == "unit") return option_value(options, module.id, "clock_unit");
     if (kind == "offset" && setting == "precision") return option_value(options, module.id, "offset_precision");
+    if (setting == "decimals") {
+        if (kind == "temp") return option_value(options, "units", "temp_decimals");
+        if (kind == "speed") return option_value(options, module.id, "wind_decimals");
+        if (kind == "bytes" && !(placeholder.percent && placeholder_value(options, module, placeholder, "percent") == "1")) return option_value(options, "units", "bytes_decimals");
+        return option_value(options, "units", "percent_decimals");
+    }
     return std::string();
 }
 
@@ -595,7 +615,7 @@ std::vector<OptionDef> visible_placeholder_settings(const ModuleOptions& options
     std::vector<OptionDef> out;
     const bool percent = placeholder.percent && placeholder_value(options, module, placeholder, "percent") == "1";
     for (const OptionDef& o : placeholder_settings(module, placeholder)) {
-        if (percent && o.id != "percent") continue;
+        if (percent && (o.id == "unit" || o.id == "also")) continue;
         out.push_back(o);
     }
     return out;
@@ -702,7 +722,7 @@ bool set_option(ModuleOptions& options, const std::string& module, const std::st
             return false;
         }
         if (o->max > o->min) d = d < o->min ? o->min : (d > o->max ? o->max : d);
-        v = o->kind == OptionKind::Integer ? std::to_string(static_cast<long long>(std::llround(d))) : fixed(d, 6);
+        v = o->kind == OptionKind::Integer ? std::to_string(static_cast<long long>(std::llround(d))) : fixed(d, 10);
         while (o->kind == OptionKind::Float && v.find('.') != std::string::npos && (v.back() == '0' || v.back() == '.')) {
             const bool dot = v.back() == '.';
             v.pop_back();
@@ -894,24 +914,35 @@ void module_values(const ModuleDef& module, const ModuleOptions& options, const 
         const PlaceholderDef* p = find_placeholder(module, name);
         return p ? placeholder_value(options, module, *p, which) : std::string();
     };
+    auto decimals = [&](const std::string& name, int fallback) {
+        const PlaceholderDef* p = find_placeholder(module, name);
+        const std::string raw = p ? placeholder_raw(options, module, *p, "decimals") : std::string("default");
+        return raw == "default" ? fallback : to_int(raw, fallback);
+    };
+    auto pct = [&](const std::string& name, double value) {
+        Units t = u;
+        t.percent_decimals = decimals(name, u.percent_decimals);
+        return format_percent(value, t);
+    };
     auto amount = [&](const std::string& name, const std::optional<double>& x, const std::optional<double>& total) {
         if (!x) return u.unknown;
         const PlaceholderDef* p = find_placeholder(module, name);
-        if (p && p->percent && setting(name, "percent") == "1") return total && *total > 0.0 ? format_percent(100.0 * *x / *total, u) : u.unknown;
-        return format_bytes_in(*x, setting(name, "unit"), u.bytes_decimals, u.bytes_label);
+        if (p && p->percent && setting(name, "percent") == "1") return total && *total > 0.0 ? pct(name, 100.0 * *x / *total) : u.unknown;
+        return format_bytes_in(*x, setting(name, "unit"), decimals(name, u.bytes_decimals), u.bytes_label);
     };
     auto temp = [&](const std::string& name, const std::optional<double>& c) {
         if (!c) return u.unknown;
         Units t = u;
         t.temp_unit = setting(name, "unit");
         t.temp_also = setting(name, "also");
+        t.temp_decimals = decimals(name, u.temp_decimals);
         return format_temp(*c, t);
     };
     auto clock = [&](const std::string& name, const std::optional<double>& mhz) { return mhz ? format_clock(*mhz, setting(name, "unit")) : u.unknown; };
     const SensorSnapshot& s = in.sensors;
 
     if (id == "cpu") {
-        v["cpu"] = known(s.cpu_percent, [&](double p) { return format_percent(p, u); });
+        v["cpu"] = known(s.cpu_percent, [&](double p) { return pct("cpu", p); });
         v["cpu_clock"] = clock("cpu_clock", s.cpu_mhz);
         const std::string custom = option_value(options, id, "custom_name");
         v["cpu_name"] = !custom.empty() ? custom : (s.cpu_name.empty() ? u.unknown : s.cpu_name);
@@ -920,7 +951,7 @@ void module_values(const ModuleDef& module, const ModuleOptions& options, const 
     } else if (id == "gpu") {
         std::optional<double> free;
         if (s.vram_total && s.vram_used) free = *s.vram_total - *s.vram_used;
-        v["gpu"] = known(s.gpu_percent, [&](double p) { return format_percent(p, u); });
+        v["gpu"] = known(s.gpu_percent, [&](double p) { return pct("gpu", p); });
         const std::string custom = option_value(options, id, "custom_name");
         v["gpu_name"] = !custom.empty() ? custom : (s.gpu_name.empty() ? u.unknown : s.gpu_name);
         v["gpu_temp"] = temp("gpu_temp", s.gpu_temp);
@@ -936,7 +967,7 @@ void module_values(const ModuleDef& module, const ModuleOptions& options, const 
         const std::optional<double>& used = ram ? s.ram_used : s.vram_used;
         std::optional<double> free;
         if (total && used) free = *total - *used;
-        v[id] = total && used && *total > 0.0 ? format_percent(100.0 * *used / *total, u) : u.unknown;
+        v[id] = total && used && *total > 0.0 ? pct(id, 100.0 * *used / *total) : u.unknown;
         v[id + "_used"] = amount(id + "_used", used, total);
         v[id + "_total"] = amount(id + "_total", total, total);
         v[id + "_free"] = amount(id + "_free", free, total);
@@ -1018,7 +1049,7 @@ void module_values(const ModuleDef& module, const ModuleOptions& options, const 
     } else if (id == "weather") {
         const WeatherSnapshot& w = in.weather;
         if (w.ok) {
-            const int wind_decimals = to_int(option_value(options, id, "wind_decimals"), 0);
+            const int wind_decimals = decimals("weather_wind", to_int(option_value(options, id, "wind_decimals"), 0));
             const std::string wind_unit = setting("weather_wind", "unit");
             const std::string wind_also = setting("weather_wind", "also");
             std::string wind = format_speed(w.wind_kmh, wind_unit, wind_decimals);
@@ -1027,7 +1058,7 @@ void module_values(const ModuleDef& module, const ModuleOptions& options, const 
             v["weather_feels"] = temp("weather_feels", w.feels_c);
             v["weather_condition"] = weather_condition(w.code);
             v["weather_icon"] = weather_icon(w.code, w.is_day);
-            v["weather_humidity"] = fixed(w.humidity, 0) + "%";
+            v["weather_humidity"] = pct("weather_humidity", w.humidity);
             v["weather_wind"] = wind;
             v["weather_place"] = w.place;
         } else {
@@ -1088,6 +1119,239 @@ StatusValues all_module_values(const ModuleOptions& options, const ModuleInputs&
     StatusValues out;
     for (const ModuleDef& m : module_defs()) module_values(m, options, inputs, out);
     return out;
+}
+
+namespace {
+
+std::string fold(std::string s) {
+    std::string out;
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (s.compare(i, 2, "\xc2\xb0") == 0) {
+            ++i;
+            continue;
+        }
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c == ' ') continue;
+        out += static_cast<char>(std::tolower(c));
+    }
+    return out;
+}
+
+std::string trim_copy(const std::string& s) {
+    std::size_t a = 0, b = s.size();
+    while (a < b && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
+    while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1]))) --b;
+    return s.substr(a, b - a);
+}
+
+const OptionDef* setting_of(const std::vector<OptionDef>& settings, const std::string& id) {
+    for (const OptionDef& o : settings) {
+        if (o.id == id) return &o;
+    }
+    return nullptr;
+}
+
+std::string match_choice(const OptionDef* o, const std::string& token) {
+    if (!o) return std::string();
+    const std::string want = fold(token);
+    for (const auto& c : o->choices) {
+        if (c.first == "default") continue;
+        if (fold(c.first) == want || fold(c.second) == want) return c.first;
+    }
+    return std::string();
+}
+
+bool module_option_modifier(ModuleOptions& options, const ModuleDef& module, const PlaceholderDef& p, const std::string& token) {
+    const std::string want = fold(token);
+    std::vector<const OptionDef*> order;
+    for (const OptionDef& o : module.options) {
+        if (o.id == p.name) order.push_back(&o);
+    }
+    for (const OptionDef& o : module.options) {
+        if (o.id != p.name) order.push_back(&o);
+    }
+    auto set_bool = [&](const std::string& name, bool value) {
+        for (const OptionDef* o : order) {
+            if (o->kind == OptionKind::Bool && (fold(o->id) == name || fold(o->label) == name)) {
+                options[module.id][o->id] = value ? "1" : "0";
+                return true;
+            }
+        }
+        return false;
+    };
+    if (want == "24h" || want == "24hour") return set_bool("hour24", true);
+    if (want == "12h" || want == "12hour") return set_bool("hour24", false);
+    if (set_bool(want, true)) return true;
+    for (const OptionDef* o : order) {
+        if (o->kind != OptionKind::Choice) continue;
+        for (const auto& c : o->choices) {
+            if (fold(c.first) == want || fold(c.second) == want) {
+                options[module.id][o->id] = c.first;
+                return true;
+            }
+        }
+    }
+    if (want.size() > 1 && want[0] == '!') return set_bool(want.substr(1), false);
+    if (want.size() > 2 && want.compare(0, 2, "no") == 0) return set_bool(want.substr(2), false);
+    return false;
+}
+
+} // namespace
+
+bool apply_modifiers(ModuleOptions& options, const ModuleDef& module, const PlaceholderDef& p, const std::string& modifiers, std::string* error) {
+    const std::vector<OptionDef> settings = placeholder_settings(module, p);
+    const OptionDef* unit = setting_of(settings, "unit");
+    const OptionDef* also = setting_of(settings, "also");
+    const OptionDef* precision = setting_of(settings, "precision");
+    const OptionDef* decimals = setting_of(settings, "decimals");
+    auto put = [&](const std::string& setting, const std::string& value) { options[module.id][placeholder_key(p.name, setting)] = value; };
+    auto fail = [&](const std::string& why) {
+        if (error) *error = "{" + p.name + ":" + modifiers + "}: " + why;
+        return false;
+    };
+    std::size_t start = 0;
+    while (start <= modifiers.size()) {
+        std::size_t comma = modifiers.find(',', start);
+        if (comma == std::string::npos) comma = modifiers.size();
+        const std::string token = trim_copy(modifiers.substr(start, comma - start));
+        start = comma + 1;
+        if (token.empty()) continue;
+        const std::string low = fold(token);
+        if (low == "%" || low == "percent") {
+            if (!p.percent) return fail(p.units == "percent" ? "it's already a percentage" : "it can't be a percentage");
+            put("percent", "1");
+            continue;
+        }
+        if (low == "amount") {
+            if (!p.percent) return fail("it's already an amount");
+            put("percent", "0");
+            continue;
+        }
+        if (low.size() == 2 && low[0] == '.' && low[1] >= '0' && low[1] <= '3') {
+            if (!decimals) return fail("it doesn't have decimals");
+            put("decimals", low.substr(1));
+            continue;
+        }
+        const std::size_t plus = token.find('+');
+        if (plus != std::string::npos) {
+            if (!also) return fail("it can't show a second unit");
+            const std::string first = trim_copy(token.substr(0, plus));
+            const std::string second = trim_copy(token.substr(plus + 1));
+            if (!first.empty()) {
+                const std::string u = match_choice(unit, first);
+                if (u.empty()) return fail("\"" + first + "\" isn't a unit it knows");
+                put("unit", u);
+            }
+            const std::string a = match_choice(also, second);
+            if (a.empty()) return fail("\"" + second + "\" isn't a unit it knows");
+            put("also", a);
+            continue;
+        }
+        const std::string u = match_choice(unit, token);
+        if (!u.empty()) {
+            put("unit", u);
+            if (p.percent) put("percent", "0");
+            continue;
+        }
+        const std::string pr = match_choice(precision, token);
+        if (!pr.empty()) {
+            put("precision", pr);
+            continue;
+        }
+        if (module_option_modifier(options, module, p, token)) continue;
+        return fail("\"" + token + "\" isn't something it understands");
+    }
+    return true;
+}
+
+std::vector<std::string> placeholder_examples(const ModuleDef& module, const PlaceholderDef& p) {
+    std::vector<std::string> out;
+    const std::string n = p.name;
+    if (p.percent) out.push_back("{" + n + ":%}");
+    if (p.units == "bytes") {
+        out.push_back("{" + n + ":GB}");
+        out.push_back("{" + n + ":MB}");
+    } else if (p.units == "temp") {
+        out.push_back("{" + n + ":C}");
+        out.push_back("{" + n + ":F}");
+        out.push_back("{" + n + ":C+F}");
+        out.push_back("{" + n + ":F+C}");
+    } else if (p.units == "speed") {
+        out.push_back("{" + n + ":kmh}");
+        out.push_back("{" + n + ":mph}");
+        out.push_back("{" + n + ":ms}");
+        out.push_back("{" + n + ":mph+kmh}");
+    } else if (p.units == "clock") {
+        out.push_back("{" + n + ":GHz}");
+        out.push_back("{" + n + ":MHz}");
+    } else if (p.units == "offset") {
+        out.push_back("{" + n + ":hours}");
+        out.push_back("{" + n + ":minutes}");
+        out.push_back("{" + n + ":seconds}");
+    }
+    if (setting_of(placeholder_settings(module, p), "decimals")) out.push_back("{" + n + (p.percent ? ":%,.1}" : ":.1}"));
+    static const std::map<std::string, std::vector<std::string>> extra = {
+        { "time", { "24h", "12h", "seconds" } },
+        { "utc", { "24h", "seconds" } },
+        { "gmt", { "24h", "seconds" } },
+        { "tai", { "24h", "seconds" } },
+        { "hour", { "24h" } },
+        { "date", { "iso", "us", "eu", "short" } },
+        { "month", { "short", "number" } },
+        { "weekday", { "short" } },
+        { "uptime", { "long", "clock", "seconds" } },
+        { "connected", { "long", "clock" } },
+        { "app_uptime", { "long", "clock" } },
+        { "world_time", { "long", "clock" } },
+    };
+    const auto more = extra.find(n);
+    if (more != extra.end()) {
+        for (const std::string& m : more->second) out.push_back("{" + n + ":" + m + "}");
+    }
+    return out;
+}
+
+std::vector<std::pair<std::string, std::string>> modified_placeholders(const std::string& text) {
+    std::vector<std::pair<std::string, std::string>> out;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '{') continue;
+        if (i + 1 < text.size() && text[i + 1] == '{') {
+            ++i;
+            continue;
+        }
+        std::size_t j = i + 1;
+        while (j < text.size() && (std::isalnum(static_cast<unsigned char>(text[j])) || text[j] == '_')) ++j;
+        if (j == i + 1 || j >= text.size() || text[j] != ':') continue;
+        const std::size_t close = text.find('}', j);
+        const std::size_t bad = text.find_first_of("{\n", j);
+        if (close == std::string::npos || (bad != std::string::npos && bad < close)) continue;
+        out.emplace_back(text.substr(i + 1, j - i - 1), text.substr(j + 1, close - j - 1));
+        i = close;
+    }
+    return out;
+}
+
+void add_modified_values(const std::string& text, const ModuleOptions& options, const ModuleInputs& inputs, StatusValues& values, std::vector<std::string>* problems) {
+    for (const auto& use : modified_placeholders(text)) {
+        const std::string key = use.first + ":" + use.second;
+        if (values.count(key)) continue;
+        const ModuleDef* m = module_of_placeholder(use.first);
+        const PlaceholderDef* p = m ? find_placeholder(*m, use.first) : nullptr;
+        if (!p) {
+            if (problems) problems->push_back("{" + key + "}: there's no placeholder called " + use.first);
+            continue;
+        }
+        ModuleOptions changed = options;
+        std::string why;
+        if (!apply_modifiers(changed, *m, *p, use.second, &why)) {
+            if (problems) problems->push_back(why);
+            continue;
+        }
+        StatusValues v;
+        module_values(*m, changed, inputs, v);
+        const auto it = v.find(use.first);
+        if (it != v.end()) values[key] = it->second;
+    }
 }
 
 } // namespace pollen

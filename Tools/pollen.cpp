@@ -611,7 +611,9 @@ private:
             std::string out;
             for (const pollen::PlaceholderDef& p : m->placeholders) {
                 const bool on = pollen::placeholder_enabled(m_session.settings().modules, *m, p);
-                out += p.name + "\t" + clean(p.description) + "\t" + (on ? "1" : "0") + "\t" + clean(pollen::requirement_text(*m, p)) + "\n";
+                std::string examples;
+                for (const std::string& e : pollen::placeholder_examples(*m, p)) examples += (examples.empty() ? "" : "|") + e;
+                out += p.name + "\t" + clean(p.description) + "\t" + (on ? "1" : "0") + "\t" + clean(pollen::requirement_text(*m, p)) + "\t" + clean(examples) + "\n";
             }
             return out;
         });
@@ -641,6 +643,11 @@ private:
             std::string why;
             if (!m_session.set_module_option(arg(f, 0), pollen::placeholder_key(arg(f, 1), arg(f, 2)), arg(f, 3), &why)) return "error\t" + clean(why);
             return std::string("ok");
+        });
+        native("placeholder_problems", [this](const std::vector<std::string>& args) {
+            std::string text = arg(args, 0);
+            for (std::size_t i = 1; i < args.size(); ++i) text += "\t" + args[i];
+            return m_session.placeholder_problems(text);
         });
         native("module_title", [](const std::vector<std::string>& args) {
             const pollen::ModuleDef* m = pollen::find_module(arg(args, 0));

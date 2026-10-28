@@ -624,9 +624,9 @@ static void test_modules() {
     CHECK(v["cpu_temp"] == "328 K (55\xc2\xb0" "C)");
     const ModuleDef* gpu = find_module("gpu");
     const PlaceholderDef* used = gpu ? find_placeholder(*gpu, "gpu_used") : nullptr;
-    CHECK(used && visible_placeholder_settings(each, *gpu, *used).size() == 1);
-    CHECK(set_option(each, "gpu", "gpu_used.percent", "0"));
     CHECK(used && visible_placeholder_settings(each, *gpu, *used).size() == 2);
+    CHECK(set_option(each, "gpu", "gpu_used.percent", "0"));
+    CHECK(used && visible_placeholder_settings(each, *gpu, *used).size() == 3);
     CHECK(used && placeholder_default(each, *gpu, *used, "unit") == "auto");
     CHECK(option_value(each, "gpu", "gpu_free.unit") == "default");
     CHECK(set_option(each, "vram", "percent", "1"));
@@ -698,6 +698,43 @@ static void test_weather_parsing() {
     CHECK(error == "Latitude must be in range");
     CHECK(url_encode("San Jos\xc3\xa9 CA") == "San%20Jos%C3%A9%20CA");
 
+    const std::string many = "{\"results\":["
+        "{\"name\":\"London\",\"latitude\":51.50853,\"longitude\":-0.12574,\"admin1\":\"England\",\"country_code\":\"GB\",\"country\":\"United Kingdom\"},"
+        "{\"name\":\"London\",\"latitude\":42.98339,\"longitude\":-81.23304,\"admin1\":\"Ontario\",\"admin2\":\"Middlesex County\",\"country_code\":\"CA\",\"country\":\"Canada\"},"
+        "{\"name\":\"London\",\"latitude\":37.12898,\"longitude\":-84.08326,\"admin1\":\"Kentucky\",\"admin2\":\"Laurel\",\"country_code\":\"US\",\"country\":\"United States\"},"
+        "{\"name\":\"London\",\"latitude\":39.88645,\"longitude\":-83.44825,\"admin1\":\"Ohio\",\"country_code\":\"US\",\"country\":\"United States\"}]}";
+    auto london = parse_geocode(many, "London");
+    CHECK(london && london->name == "London, England" && london->latitude == 51.50853);
+    london = parse_geocode(many, "London, Canada");
+    CHECK(london && london->name == "London, Ontario");
+    london = parse_geocode(many, "London, ON");
+    CHECK(london && london->name == "London, Ontario");
+    london = parse_geocode(many, "London, CA");
+    CHECK(london && london->name == "London, Ontario");
+    london = parse_geocode(many, "London, USA");
+    CHECK(london && london->name == "London, Kentucky");
+    london = parse_geocode(many, "London, OH, United States");
+    CHECK(london && london->name == "London, Ohio");
+    london = parse_geocode(many, "London, Laurel County, KY");
+    CHECK(london && london->name == "London, Kentucky");
+    london = parse_geocode(many, "London, UK");
+    CHECK(london && london->name == "London, England");
+    london = parse_geocode(many, " London ,  england ");
+    CHECK(london && london->name == "London, England");
+    error.clear();
+    CHECK(!parse_geocode(many, "London, Japan", &error));
+    CHECK(error.find("couldn't find \"London\" in Japan") == 0 && error.find("London, England, United Kingdom") != std::string::npos);
+    CHECK(geocode_country("London, Canada") == "CA" && geocode_country("Smalltown, Germany") == "DE" && geocode_country("Lima, Peru") == "PE");
+    CHECK(geocode_country("London, UK") == "GB" && geocode_country("Paris, France, USA") == "US" && geocode_country("Springfield, IL").empty());
+    CHECK(geocode_country("Osaka, JP") == "JP" && geocode_country("Austin, Texas") == "US" && geocode_country("Perth, Western Australia") == "AU");
+    CHECK(geocode_query_name("  Springfield , IL") == "Springfield");
+    CHECK(coordinate_text(41.87811234) == "41.87811234" && coordinate_text(-87.6) == "-87.6" && coordinate_text(12.0) == "12" && coordinate_text(-0.0000000001) == "0");
+    ModuleOptions precise;
+    CHECK(set_option(precise, "weather", "latitude", "41.878112345"));
+    CHECK(option_value(precise, "weather", "latitude") == "41.878112345");
+    CHECK(set_option(precise, "weather", "longitude", "-87.62979812"));
+    CHECK(weather_config(precise).longitude == -87.62979812);
+
     ModuleOptions o;
     set_option(o, "weather", "wind", "1");
     set_option(o, "weather", "wind_unit", "mph");
@@ -755,7 +792,10 @@ static void test_weather_fetch() {
             std::lock_guard<std::mutex> lock(url_mutex);
             last_url = req.url();
         }
-        if (req.path() == "/search") {
+        if (req.path() == "/search" && req.url().find("name=Smalltown") != std::string::npos) {
+            if (req.url().find("countryCode=DE") != std::string::npos) res.json("{\"results\":[{\"name\":\"Smalltown\",\"latitude\":50.123456789,\"longitude\":8.987654321,\"admin1\":\"Hesse\",\"country_code\":\"DE\",\"country\":\"Germany\"}]}");
+            else res.json("{\"results\":[{\"name\":\"Smalltown\",\"latitude\":40.5,\"longitude\":-90.5,\"admin1\":\"Illinois\",\"country_code\":\"US\",\"country\":\"United States\"}]}");
+        } else if (req.path() == "/search") {
             ++geocodes;
             res.json("{\"results\":[{\"name\":\"Chicago\",\"latitude\":41.85,\"longitude\":-87.65,\"admin1\":\"Illinois\",\"country_code\":\"US\"}]}");
         } else {
@@ -788,10 +828,132 @@ static void test_weather_fetch() {
     CHECK(geocodes.load() == 1 && forecasts.load() == 1);
     {
         std::lock_guard<std::mutex> lock(url_mutex);
-        CHECK(last_url.find("latitude=41.8500") != std::string::npos);
+        CHECK(last_url.find("latitude=41.85&") != std::string::npos);
+        CHECK(last_url.find("count=100") == std::string::npos);
     }
     weather.stop();
+
+    auto run = [&](const pollen::WeatherConfig& config) {
+        pollen::Weather other;
+        other.configure(config);
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        pollen::WeatherSnapshot got;
+        while (std::chrono::steady_clock::now() < until) {
+            got = other.snapshot();
+            if (got.ok || (!got.loading && !got.error.empty())) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        other.stop();
+        return got;
+    };
+    pollen::WeatherConfig german = c;
+    german.city = "Smalltown, Germany";
+    w = run(german);
+    CHECK(w.ok && w.place == "Smalltown, Hesse");
+    {
+        std::lock_guard<std::mutex> lock(url_mutex);
+        CHECK(last_url.find("latitude=50.12345679&longitude=8.98765432&") != std::string::npos);
+    }
+    pollen::WeatherConfig nowhere = c;
+    nowhere.city = "Smalltown, Japan";
+    w = run(nowhere);
+    CHECK(!w.ok && w.error.find("couldn't find \"Smalltown\" in Japan") == 0);
+    pollen::WeatherConfig exact = c;
+    exact.coordinates = true;
+    exact.latitude = 41.8781136;
+    exact.longitude = -87.6297982;
+    w = run(exact);
+    CHECK(w.ok && w.place == "41.8781136, -87.6297982");
+    {
+        std::lock_guard<std::mutex> lock(url_mutex);
+        CHECK(last_url.find("latitude=41.8781136&longitude=-87.6297982&") != std::string::npos);
+    }
     server.close();
+}
+
+static void test_modifiers() {
+    using namespace pollen;
+    ModuleOptions o;
+    set_option(o, "ram", "app", "1");
+    set_option(o, "ram", "vrchat", "1");
+    ModuleInputs in;
+    in.sensors.ram_total = 16.0 * 1024 * 1024 * 1024;
+    in.sensors.ram_used = 6.0 * 1024 * 1024 * 1024;
+    in.sensors.ram_app = 200.0 * 1024 * 1024;
+    in.sensors.ram_vrchat = 4.0 * 1024 * 1024 * 1024;
+    in.sensors.vrchat_running = true;
+    in.sensors.cpu_percent = 23.456;
+    in.sensors.cpu_temp = 54.6;
+    in.sensors.cpu_mhz = 4210.0;
+    const std::string tpl = "App: {ram_app} ({ram_app:%})\nVRC: {ram_vrchat} ({ram_vrchat:%,.1}) {ram_vrchat:MB}\n{cpu:.1} {cpu_temp:F+C} {cpu_temp} {cpu_clock:MHz}";
+    StatusValues v = all_module_values(o, in);
+    add_modified_values(tpl, o, in, v);
+    CHECK(render_status(tpl, v) == "App: 200.0 MB (1%)\nVRC: 4.0 GB (25.0%) 4096.0 MB\n23.5% 130\xc2\xb0" "F (55\xc2\xb0" "C) 55\xc2\xb0" "C 4210 MHz");
+
+    CHECK(set_option(o, "ram", "ram_vrchat.percent", "1"));
+    CHECK(set_option(o, "ram", "ram_vrchat.decimals", "2"));
+    v = all_module_values(o, in);
+    add_modified_values("{ram_vrchat:amount} {ram_vrchat:GB}", o, in, v);
+    CHECK(v["ram_vrchat"] == "25.00%" && v["ram_vrchat:amount"] == "4.00 GB" && v["ram_vrchat:GB"] == "4.00 GB");
+
+    std::vector<std::string> problems;
+    v.clear();
+    add_modified_values("{ram_total:%} {cpu_temp:Q} {nope:%} {cpu:%} {ram_app:.7}", o, in, v, &problems);
+    CHECK(problems.size() == 5 && v.empty());
+    CHECK(render_status("{cpu_temp:Q}", v) == "{cpu_temp:Q}");
+
+    ModuleOptions w;
+    set_option(w, "weather", "wind", "1");
+    set_option(w, "weather", "humidity", "1");
+    ModuleInputs win;
+    win.weather.ok = true;
+    win.weather.wind_kmh = 18.0;
+    win.weather.temp_c = 12.4;
+    win.weather.humidity = 71.25;
+    StatusValues wv;
+    module_values(*find_module("weather"), w, win, wv);
+    add_modified_values("{weather_wind:mph+kmh} {weather_wind:m/s,.1} {weather_temp:F+C} {weather_humidity:.1}", w, win, wv);
+    CHECK(wv["weather_wind:mph+kmh"] == "11 mph (18 km/h)" && wv["weather_wind:m/s,.1"] == "5.0 m/s");
+    CHECK(wv["weather_temp:F+C"] == "54\xc2\xb0" "F (12\xc2\xb0" "C)" && wv["weather_humidity:.1"] == "71.2%" && wv["weather_humidity"] == "71%");
+
+    ModuleOptions t;
+    set_option(t, "time", "offset", "1");
+    ModuleInputs tin;
+    StatusValues tv;
+    add_modified_values("{tai_offset:seconds}", t, tin, tv);
+    CHECK(tv["tai_offset:seconds"] == format_offset(utc_offset_seconds(std::chrono::system_clock::to_time_t(tin.now)) - 37, "seconds", "named", "TAI"));
+
+    ModuleOptions plain;
+    ModuleInputs when;
+    std::tm tm{};
+    tm.tm_year = 126;
+    tm.tm_mon = 9;
+    tm.tm_mday = 28;
+    tm.tm_hour = 15;
+    tm.tm_min = 4;
+    tm.tm_sec = 9;
+    tm.tm_isdst = -1;
+    when.now = std::chrono::system_clock::from_time_t(std::mktime(&tm));
+    when.sensors.uptime = 93784.0;
+    StatusValues tv2 = all_module_values(plain, when);
+    std::vector<std::string> none;
+    const std::string spots = "{time} {time:24h} {time:seconds} {time:24h,seconds} {date} {date:iso} {month:number} {weekday:short} {weekday} {uptime} {uptime:long}";
+    add_modified_values(spots, plain, when, tv2, &none);
+    CHECK(none.empty());
+    CHECK(render_status(spots, tv2) == "3:04 PM 15:04 3:04:09 PM 15:04:09 October 28, 2026 2026-10-28 10 Wed Wednesday 1d 2h 3m 1 day, 2 hours, 3 minutes");
+    CHECK(set_option(plain, "time", "hour24", "1"));
+    CHECK(set_option(plain, "time", "seconds", "1"));
+    tv2 = all_module_values(plain, when);
+    add_modified_values("{time:12h} {time:!seconds} {time:noseconds}", plain, when, tv2, &none);
+    CHECK(none.empty() && tv2["time:12h"] == "3:04:09 PM" && tv2["time:!seconds"] == "15:04" && tv2["time:noseconds"] == "15:04" && tv2["time"] == "15:04:09");
+    add_modified_values("{time:sideways}", plain, when, tv2, &none);
+    CHECK(none.size() == 1);
+
+    const ModuleDef* ram = find_module("ram");
+    CHECK(ram && placeholder_examples(*ram, *find_placeholder(*ram, "ram_app")).front() == "{ram_app:%}");
+    const ModuleDef* date = find_module("date");
+    CHECK(date && placeholder_examples(*date, *find_placeholder(*date, "date")).front() == "{date:iso}");
+    CHECK(modified_placeholders("a {x} {ram_app:%} {{ram:%}} {cpu:.1}").size() == 2);
 }
 
 static void test_vrchat_log() {
@@ -972,6 +1134,7 @@ int main() {
     test_fake_linux_sensors();
     test_modules();
     test_weather_parsing();
+    test_modifiers();
     test_vrchat_log();
     test_friend_book();
     test_rotation_without_sending();

@@ -64,6 +64,10 @@ std::string placeholder_value(const ModuleOptions& options, const ModuleDef& mod
 std::vector<OptionDef> visible_placeholder_settings(const ModuleOptions& options, const ModuleDef& module, const PlaceholderDef& placeholder);
 std::string placeholder_key(const std::string& placeholder, const std::string& setting);
 std::string choice_label(const OptionDef& option, const std::string& value);
+std::string placeholder_raw(const ModuleOptions& options, const ModuleDef& module, const PlaceholderDef& placeholder, const std::string& setting);
+bool apply_modifiers(ModuleOptions& options, const ModuleDef& module, const PlaceholderDef& placeholder, const std::string& modifiers, std::string* error = nullptr);
+std::vector<std::string> placeholder_examples(const ModuleDef& module, const PlaceholderDef& placeholder);
+std::vector<std::pair<std::string, std::string>> modified_placeholders(const std::string& text);
 
 std::string option_value(const ModuleOptions& options, const std::string& module, const std::string& option);
 bool option_on(const ModuleOptions& options, const std::string& module, const std::string& option);
@@ -97,6 +101,7 @@ struct ModuleInputs {
 
 void module_values(const ModuleDef& module, const ModuleOptions& options, const ModuleInputs& inputs, StatusValues& out);
 StatusValues all_module_values(const ModuleOptions& options, const ModuleInputs& inputs);
+void add_modified_values(const std::string& text, const ModuleOptions& options, const ModuleInputs& inputs, StatusValues& values, std::vector<std::string>* problems = nullptr);
 
 struct Units {
     std::string bytes_unit = "auto";

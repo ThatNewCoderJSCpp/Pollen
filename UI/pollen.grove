@@ -143,7 +143,7 @@
                         <div class="grow"></div>
                         <input_bool id="status-on" switch>Send automatically</input_bool>
                     </row>
-                    <p class="hint">Pollen sends this to the chatbox on a timer. Put a line with only --- between messages to rotate through them. A line whose placeholders are all empty is left out, so a song line disappears when nothing is playing. Click a placeholder to add it, and open the Modules tab for more.</p>
+                    <p class="hint">Pollen sends this to the chatbox on a timer. Put a line with only --- between messages to rotate through them. A line whose placeholders are all empty is left out, so a song line disappears when nothing is playing. Click a placeholder to add it, and open the Modules tab for more. Add to a placeholder after a colon to change it in just that spot: {ram_app:%}, {ram_app:MB}, {cpu_temp:F+C}, {cpu:.1}.</p>
                     <input_code id="status-template" class="template" language="text" line-numbers="false" autocomplete="false"></input_code>
                     <div class="sub-title">Placeholders you can use</div>
                     <column id="placeholders" class="ph-list status-ph"></column>
@@ -157,6 +157,7 @@
                     </row>
                     <div class="sub-title">Preview</div>
                     <pre id="status-preview" class="preview"></pre>
+                    <div id="status-problems" class="warning hidden"></div>
                 </column>
             </column>
         </page>
@@ -279,7 +280,7 @@
                 <div class="sub-title">Options</div>
                 <column id="mm-options" class="mm-options"></column>
                 <div class="sub-title">Placeholders</div>
-                <p class="hint">Click a placeholder to add it to the box below. Each one can have its own unit, or be a percentage, without changing the others.</p>
+                <p class="hint">Click a placeholder to add it to the box below. The settings next to each one are its defaults wherever it's used. To show it differently in just one spot, add to it after a colon: {ram_app:%} for a percentage, {ram_app:MB} for a unit, {cpu_temp:F+C} for two units, {cpu:.1} for one decimal, or several at once like {ram_vrchat:%,.1}. So "{ram_app} ({ram_app:%})" shows both.</p>
                 <column id="mm-chips" class="ph-list"></column>
                 <div class="sub-title">Try it</div>
                 <input_code id="mm-template" class="mm-template" language="text" line-numbers="false" autocomplete="false"></input_code>

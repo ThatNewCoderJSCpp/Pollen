@@ -992,3 +992,17 @@ button.small {
 .fav-row.archived .fav-name {
     color: var(--muted);
 }
+
+.ph-examples {
+    gap: 6px;
+    row-gap: 4px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin: 0 0 0 204px;
+}
+
+.small-chip {
+    font-size: 11px;
+    padding: 2px 8px;
+    color: var(--muted);
+}
