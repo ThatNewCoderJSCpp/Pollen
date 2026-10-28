@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(pollen VERSION 0.1.0 DESCRIPTION "Pollen: a VRChat OSC app for Linux, Windows and macOS built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
+project(pollen VERSION 0.1.1 DESCRIPTION "Pollen: a VRChat OSC app for Linux, Windows and macOS built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -13,7 +13,7 @@ option(POLLEN_BUILD_TESTS "Build the Pollen tests" ON)
 option(POLLEN_PACKAGE "Make release packages: pollen with its window and compiled script built in, linked so it runs without a compiler" OFF)
 option(POLLEN_BUNDLE "Run pollen-host --bundle as part of the build to make pollen with its window built in (turn off when cross-compiling, then bundle on the target)" ON)
 set(POLLEN_FIZMO_TAG "v0.3.7" CACHE STRING "Fizmo git tag to fetch (needs the net component)")
-set(POLLEN_GROVE_TAG "v0.2.9" CACHE STRING "Grove git tag to fetch")
+set(POLLEN_GROVE_TAG "v0.2.8" CACHE STRING "Grove git tag to fetch")
 set(POLLEN_WALNUT_TAG "v0.2.9" CACHE STRING "Walnut git tag Grove fetches")
 
 if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
@@ -97,10 +97,20 @@ add_library(pollen_core STATIC
     Source/pollen/system_stats.cpp
     Source/pollen/media.cpp
     Source/pollen/media_windows.cpp
-    Source/pollen/session.cpp)
+    Source/pollen/session.cpp
+    Source/pollen/sensors.cpp
+    Source/pollen/sensors_linux.cpp
+    Source/pollen/sensors_unix.cpp
+    Source/pollen/sensors_windows.cpp
+    Source/pollen/nvml.cpp
+    Source/pollen/modules.cpp
+    Source/pollen/weather.cpp)
 add_library(pollen::core ALIAS pollen_core)
 target_include_directories(pollen_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Include")
-target_link_libraries(pollen_core PUBLIC pollen_osc)
+target_link_libraries(pollen_core PUBLIC pollen_osc ${CMAKE_DL_LIBS})
+if(WIN32)
+    target_link_libraries(pollen_core PUBLIC ole32 oleaut32)
+endif()
 pollen_warnings(pollen_core)
 
 if(POLLEN_BUILD_TESTS)

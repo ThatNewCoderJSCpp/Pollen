@@ -12,6 +12,8 @@ bool: typing_sent = false;
 string: status_text_shown = "";
 string: last_sent = "";
 string: compose_now = "";
+string: module_open = "";
+bool: module_grid_built = false;
 
 function call(const string&: name, const string&: arg) -> string;
 function el(const string&: tag, const string&: cls, const string&: label) -> grove::Element;
@@ -39,6 +41,17 @@ function send_chat(const string&: msg) -> void;
 function set_typing(bool: on) -> void;
 function fill_folders() -> void;
 function update_bubble() -> void;
+function build_module_grid() -> void;
+function update_module_grid() -> void;
+function open_module(const string&: id) -> void;
+function build_module_options() -> void;
+function option_changed(const string&: option, const string&: value) -> void;
+function update_module_chips() -> void;
+function update_module_preview() -> void;
+function insert_module_placeholder(const string&: name) -> void;
+function fill_status_chips() -> void;
+function insert_status_placeholder(const string&: name) -> void;
+function dash(const string&: value) -> string;
 
 function call(const string&: name, const string&: arg) -> string {
     return grove::call("pollen." + name, arg);
@@ -217,6 +230,17 @@ function update_system() -> void {
     set_text("sys-cpu", f[0]);
     set_text("sys-ram", f[1]);
     set_text("sys-up", f[3]);
+    if (f.size() > 12l) then {
+        set_text("sys-gpu", f[8]);
+        set_text("sys-vram", dash(f[9]));
+        set_text("sys-gpu-name", dash(f[10]));
+        set_text("sys-cpu-name", dash(f[11]));
+        set_text("sys-mem", dash(f[12]));
+        if (f.size() > 13l) then {
+            set_text("sys-warning", f[13]);
+            show("sys-warning", !f[13].empty());
+        }
+    }
     if (!f[4].empty()) then {
         if (f[5] == "playing") then {
             set_text("sys-song", "\u{25B6} " + f[4]);
@@ -539,6 +563,261 @@ function update_bubble() -> void {
     set_text("bubble-text", call("chat_preview", shown));
 } end function update_bubble
 
+function dash(const string&: value) -> string {
+    if (value.empty()) then {
+        return "-";
+    }
+    return value;
+} end function dash
+
+function build_module_grid() -> void {
+    grove::Element: grid = grove::get_by_id("module-grid");
+    clear(grid);
+    auto: rows = call("modules", "").split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 7l) then {
+            continue;
+        }
+        string: id = f[0];
+        grove::Element: card = el("column", "module-card", "");
+        card.set_attribute("id", "mc-" + id);
+        grove::Element: head = el("row", "module-head", "");
+        head.append_child(el("text", "module-icon", f[1]));
+        head.append_child(el("text", "module-title", f[2]));
+        card.append_child(head);
+        card.append_child(el("div", "module-desc", f[3]));
+        grove::Element: sample = el("div", "module-sample", unescape(f[4]));
+        sample.set_attribute("id", "ms-" + id);
+        card.append_child(sample);
+        string: count = f[5] + " of " + f[6] + " placeholders on";
+        if (f[6] == "0") then {
+            count = "applies to every module";
+        }
+        grove::Element: n = el("div", "module-count", count);
+        n.set_attribute("id", "mn-" + id);
+        card.append_child(n);
+        card.on("click", [id](grove::Event&: e) -> void {
+            open_module(id);
+        });
+        grid.append_child(card);
+    }
+    module_grid_built = true;
+} end function build_module_grid
+
+function update_module_grid() -> void {
+    if (!module_grid_built) then {
+        build_module_grid();
+        return;
+    }
+    auto: rows = call("modules", "").split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 7l) then {
+            continue;
+        }
+        set_text("ms-" + f[0], unescape(f[4]));
+        if (f[6] != "0") then {
+            set_text("mn-" + f[0], f[5] + " of " + f[6] + " placeholders on");
+        }
+    }
+} end function update_module_grid
+
+function open_module(const string&: id) -> void {
+    module_open = id;
+    auto: t = call("module_title", id).split("\t");
+    if (t.size() >= 3l) then {
+        set_text("mm-icon", t[0]);
+        set_text("mm-title", t[1]);
+        set_text("mm-desc", t[2]);
+    }
+    grove::get_by_id("mm-template").set_value_string(unescape(call("module_template", id)));
+    set_text("mm-note", "");
+    build_module_options();
+    update_module_chips();
+    update_module_preview();
+    grove::get_by_id("module-modal").open_modal();
+} end function open_module
+
+function build_module_options() -> void {
+    grove::Element: box = grove::get_by_id("mm-options");
+    clear(box);
+    auto: rows = call("module_options", module_open).split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 8l) then {
+            continue;
+        }
+        string: kind = f[0];
+        string: option = f[1];
+        if (kind == "bool") then {
+            grove::Element: b = grove::create_element("input_bool");
+            b.set_attribute("switch", "");
+            b.set_inner_text(f[2]);
+            b.set_value_bool(f[3] == "1");
+            b.on("change", [option](grove::Event&: e) -> void {
+                if (e.target().value_bool()) then {
+                    option_changed(option, "1");
+                } else then {
+                    option_changed(option, "0");
+                }
+            });
+            box.append_child(b);
+        } else then {
+            grove::Element: row = el("row", "mm-option", "");
+            row.append_child(el("text", "mm-label", f[2]));
+            if (kind == "choice") then {
+                grove::Element: sel = grove::create_element("input_select");
+                sel.set_attribute("class", "mm-input");
+                auto: choices = f[5].split("|");
+                for (long int: c = 0l; c < choices.size(); c += 1l) {
+                    auto: pair = choices[c].split("=");
+                    if (pair.size() < 2l) then {
+                        continue;
+                    }
+                    grove::Element: o = grove::create_element("option");
+                    o.set_attribute("value", pair[0]);
+                    o.set_inner_text(pair[1]);
+                    sel.append_child(o);
+                }
+                sel.set_attribute("value", f[3]);
+                sel.on("change", [option](grove::Event&: e) -> void {
+                    option_changed(option, e.target().value_string());
+                });
+                row.append_child(sel);
+            } else if (kind == "integer") then {
+                grove::Element: n = grove::create_element("input_integer");
+                n.set_attribute("class", "mm-input");
+                n.set_attribute("value", f[3]);
+                n.on("change", [option](grove::Event&: e) -> void {
+                    option_changed(option, e.target().value_integer().to_string());
+                });
+                row.append_child(n);
+            } else if (kind == "float") then {
+                grove::Element: n = grove::create_element("input_string");
+                n.set_attribute("class", "mm-input");
+                n.set_attribute("allow", "digits");
+                n.set_attribute("chars", ".-");
+                n.set_value_string(f[3]);
+                n.on("change", [option](grove::Event&: e) -> void {
+                    option_changed(option, e.target().value_string());
+                });
+                row.append_child(n);
+            } else then {
+                grove::Element: t = grove::create_element("input_string");
+                t.set_attribute("class", "mm-input");
+                t.set_value_string(f[3]);
+                t.on("change", [option](grove::Event&: e) -> void {
+                    option_changed(option, e.target().value_string());
+                });
+                row.append_child(t);
+            }
+            box.append_child(row);
+        }
+        if (!f[4].empty()) then {
+            box.append_child(el("div", "mm-hint", f[4]));
+        }
+    }
+} end function build_module_options
+
+function option_changed(const string&: option, const string&: value) -> void {
+    string: r = call("module_set", tab3(module_open, option, value));
+    if (failed(r)) then {
+        set_text("mm-note", reason(r));
+    } else then {
+        set_text("mm-note", "");
+    }
+    build_module_options();
+    update_module_chips();
+    update_module_preview();
+    update_module_grid();
+    fill_status_chips();
+} end function option_changed
+
+function update_module_chips() -> void {
+    grove::Element: box = grove::get_by_id("mm-chips");
+    clear(box);
+    auto: rows = call("module_placeholders", module_open).split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 4l) then {
+            continue;
+        }
+        string: name = f[0];
+        bool: on = f[2] == "1";
+        string: need = f[3];
+        grove::Element: chip = el("text", "chip", "{" + name + "}");
+        if (on) then {
+            chip.set_attribute("title", f[1]);
+        } else then {
+            chip.add_class("off");
+            chip.set_attribute("title", need + " to use this");
+        }
+        chip.on("click", [name, on, need](grove::Event&: e) -> void {
+            if (on) then {
+                insert_module_placeholder(name);
+            } else then {
+                set_text("mm-note", need + " to use {" + name + "}");
+            }
+        });
+        box.append_child(chip);
+    }
+} end function update_module_chips
+
+function insert_module_placeholder(const string&: name) -> void {
+    grove::Element: t = grove::get_by_id("mm-template");
+    string: value = t.value_string() + "{" + name + "}";
+    t.set_value_string(value);
+    call("module_template_set", tab2(module_open, value));
+    update_module_preview();
+} end function insert_module_placeholder
+
+function update_module_preview() -> void {
+    if (module_open.empty()) then {
+        return;
+    }
+    string: tpl = grove::get_by_id("mm-template").value_string();
+    string: out = call("module_preview", tab2(module_open, tpl));
+    if (out.empty()) then {
+        set_text("mm-preview", "(nothing to show right now)");
+    } else then {
+        set_text("mm-preview", out);
+    }
+    set_text("mm-status", call("module_status", module_open));
+    string: warning = call("module_warning", module_open);
+    set_text("mm-warning", warning);
+    show("mm-warning", !warning.empty());
+} end function update_module_preview
+
+function fill_status_chips() -> void {
+    grove::Element: box = grove::get_by_id("placeholders");
+    clear(box);
+    auto: rows = call("placeholders", "").split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f[0].empty()) then {
+            continue;
+        }
+        string: name = f[0];
+        grove::Element: chip = el("text", "chip", name);
+        if (f.size() > 1l) then {
+            chip.set_attribute("title", f[1]);
+        }
+        chip.on("click", [name](grove::Event&: e) -> void {
+            insert_status_placeholder(name);
+        });
+        box.append_child(chip);
+    }
+} end function fill_status_chips
+
+function insert_status_placeholder(const string&: name) -> void {
+    grove::Element: t = grove::get_by_id("status-template");
+    string: value = t.value_string() + name;
+    t.set_value_string(value);
+    call("set", tab2("status_template", value));
+    update_preview();
+} end function insert_status_placeholder
+
 function fill_folders() -> void {
     grove::Element: box = grove::get_by_id("folders");
     clear(box);
@@ -769,14 +1048,55 @@ grove::get_by_id("settings").on("page_show", [](grove::Event&: e) -> void {
     fill_folders();
 });
 
-auto: placeholders = call("placeholders", "").split("\n");
-for (long int: i = 0l; i < placeholders.size(); i += 1l) {
-    if (placeholders[i].empty()) then {
-        continue;
+fill_status_chips();
+
+grove::get_by_id("mm-template").on("input", [](grove::Event&: e) -> void {
+    call("module_template_set", tab2(module_open, e.target().value_string()));
+    update_module_preview();
+});
+
+grove::get_by_id("mm-template").on("change", [](grove::Event&: e) -> void {
+    call("module_template_set", tab2(module_open, e.target().value_string()));
+    update_module_preview();
+});
+
+grove::get_by_id("mm-add").on("click", [](grove::Event&: e) -> void {
+    string: tpl = grove::get_by_id("mm-template").value_string();
+    if (tpl.trim().empty()) then {
+        set_text("mm-note", "Write something to add first");
+        return;
     }
-    grove::Element: chip = el("text", "chip", placeholders[i]);
-    grove::get_by_id("placeholders").append_child(chip);
-}
+    string: r = call("status_append", tpl);
+    if (failed(r)) then {
+        set_text("mm-note", reason(r));
+        return;
+    }
+    grove::get_by_id("status-template").set_value_string(unescape(r));
+    set_text("mm-note", "Added to the end of your status message");
+    update_preview();
+});
+
+grove::get_by_id("module-modal").on("close", [](grove::Event&: e) -> void {
+    module_open = "";
+    update_module_grid();
+});
+
+grove::get_by_id("modules").on("page_show", [](grove::Event&: e) -> void {
+    update_module_grid();
+});
+
+grove::get_by_id("chat").on("page_show", [](grove::Event&: e) -> void {
+    fill_status_chips();
+});
+
+grove::set_interval(1000.0, []() -> void {
+    if (!module_open.empty()) then {
+        update_module_preview();
+    }
+    if (grove::get_by_id("modules").is_current()) then {
+        update_module_grid();
+    }
+});
 
 grove::set_interval(200.0, []() -> void {
     update_state();

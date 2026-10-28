@@ -2,6 +2,9 @@
 #define POLLEN_SESSION_HPP
 
 #include "media.hpp"
+#include "modules.hpp"
+#include "sensors.hpp"
+#include "weather.hpp"
 #include "settings.hpp"
 #include "status.hpp"
 #include "system_stats.hpp"
@@ -86,6 +89,17 @@ public:
     osc::vrchat::Connection& connection() noexcept { return m_connection; }
     const SystemSnapshot& system() const noexcept { return m_stats.snapshot(); }
     NowPlaying now_playing() const { return m_media.now_playing(); }
+    SensorSnapshot sensors() const { return m_sensors.snapshot(); }
+    WeatherSnapshot weather() const { return m_weather.snapshot(); }
+
+    ModuleInputs module_inputs() const;
+    std::string module_preview(const std::string& module, const std::string& text) const;
+    std::string module_status(const std::string& module) const;
+    std::string module_warning(const std::string& module) const;
+    bool set_module_option(const std::string& module, const std::string& option, const std::string& value, std::string* error = nullptr);
+    std::string module_template(const std::string& module) const;
+    bool set_module_template(const std::string& module, const std::string& text, std::string* error = nullptr);
+    double connected_seconds() const;
 
 private:
     void apply_avatar(osc::vrchat::AvatarSnapshot snapshot);
@@ -97,6 +111,8 @@ private:
     std::string m_error;
     osc::vrchat::Connection m_connection;
     SystemStats m_stats;
+    Sensors m_sensors;
+    Weather m_weather;
     Media m_media;
     StatusRotation m_status;
     osc::vrchat::QueryLink m_link;
@@ -108,6 +124,8 @@ private:
     std::chrono::steady_clock::time_point m_started;
     std::chrono::steady_clock::time_point m_last_stats;
     bool m_typing = false;
+    bool m_heard = false;
+    std::chrono::steady_clock::time_point m_heard_since;
 };
 
 std::optional<osc::Message> parse_message_line(const std::string& line, std::string* error = nullptr);

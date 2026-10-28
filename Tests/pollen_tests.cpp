@@ -1,8 +1,21 @@
 #include <osc/osc.hpp>
+#include <fizmo/../networking.hpp>
 #include <pollen/session.hpp>
 #include <pollen/status.hpp>
+#include <pollen/modules.hpp>
+#include <pollen/sensors.hpp>
+#include <pollen/weather.hpp>
 
+#include <filesystem>
+#include <fstream>
+
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <atomic>
+#include <future>
+#include <mutex>
+#include <set>
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -325,7 +338,7 @@ static void test_mdns_messages() {
     const auto rb = mdns_encode(r);
     const auto rd = mdns_decode(rb.data(), rb.size());
     CHECK(rd && rd->response && rd->records.size() == 3);
-    const auto found = rd ? mdns_services(*rd, "_oscjson._tcp") : std::vector<Service>{};
+    const auto found = rd ? mdns_services(*rd, "_oscjson._tcp") : std::vector<osc::query::Service>{};
     CHECK(found.size() == 1);
     CHECK(found.size() == 1 && found[0].instance == "VRChat-Client-ABC123" && found[0].port == 51234 && found[0].address == "127.0.0.1");
 
@@ -416,7 +429,7 @@ static void test_query_discovery() {
     const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(4);
     while (std::chrono::steady_clock::now() < until && !saw_us) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        for (const Service& s : fake_mdns.services("_oscjson._tcp")) {
+        for (const osc::query::Service& s : fake_mdns.services("_oscjson._tcp")) {
             if (s.instance == link.instance()) {
                 const HttpResult hi = http_get(s.address, s.port, "/?HOST_INFO");
                 const auto parsed = host_info_from_json(hi.body);
@@ -425,6 +438,269 @@ static void test_query_discovery() {
         }
     }
     CHECK(saw_us);
+}
+
+static void write_file(const std::filesystem::path& p, const std::string& text) {
+    std::filesystem::create_directories(p.parent_path());
+    std::ofstream(p) << text;
+}
+
+static void test_fake_linux_sensors() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "pollen-fake-root";
+    fs::remove_all(root);
+    write_file(root / "proc/stat", "cpu  100 0 100 800 0 0 0 0 0 0\ncpu0 1 2 3 4\n");
+    write_file(root / "proc/cpuinfo", "processor\t: 0\nmodel name\t: AMD Ryzen 7 5800X 8-Core Processor\ncpu MHz\t\t: 3800.000\n");
+    write_file(root / "sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "4200000\n");
+    write_file(root / "sys/devices/system/cpu/cpu1/cpufreq/scaling_cur_freq", "3800000\n");
+    write_file(root / "sys/class/hwmon/hwmon0/name", "nvme\n");
+    write_file(root / "sys/class/hwmon/hwmon0/temp1_input", "31000\n");
+    write_file(root / "sys/class/hwmon/hwmon1/name", "k10temp\n");
+    write_file(root / "sys/class/hwmon/hwmon1/temp1_label", "Tctl\n");
+    write_file(root / "sys/class/hwmon/hwmon1/temp1_input", "54250\n");
+    write_file(root / "proc/meminfo", "MemTotal:       16000000 kB\nMemFree:  1000 kB\nMemAvailable:    4000000 kB\n");
+    write_file(root / "proc/1/status", "Name:\tpollen\nVmRSS:\t   51200 kB\n");
+    write_file(root / "proc/4242/comm", "VRChat.exe\n");
+    write_file(root / "proc/4242/status", "Name:\tVRChat.exe\nVmRSS:\t 4194304 kB\n");
+    write_file(root / "proc/uptime", "93784.12 1000.0\n");
+    write_file(root / "sys/class/drm/card0/device/vendor", "0x1002\n");
+    write_file(root / "sys/class/drm/card0/device/device", "0x73bf\n");
+    write_file(root / "sys/class/drm/card0/device/mem_info_vram_total", "17163091968\n");
+    write_file(root / "sys/class/drm/card0/device/mem_info_vram_used", "2147483648\n");
+    write_file(root / "sys/class/drm/card0/device/gpu_busy_percent", "37\n");
+    write_file(root / "sys/class/drm/card0/device/uevent", "DRIVER=amdgpu\nPCI_SLOT_NAME=0000:03:00.0\n");
+    write_file(root / "sys/class/drm/card0/device/hwmon/hwmon5/temp1_label", "edge\n");
+    write_file(root / "sys/class/drm/card0/device/hwmon/hwmon5/temp1_input", "61000\n");
+    write_file(root / "sys/class/drm/card0/device/hwmon/hwmon5/freq1_input", "2100000000\n");
+    write_file(root / "sys/class/drm/card0-DP-1/status", "connected\n");
+    write_file(root / "usr/share/hwdata/pci.ids", "1002  Advanced Micro Devices, Inc. [AMD/ATI]\n\t73bf  Navi 21 [Radeon RX 6800/6800 XT / 6900 XT]\n\t73ff  Navi 23\n10de  NVIDIA Corporation\n");
+    write_file(root / "proc/4242/fdinfo/5", "pos:\t0\ndrm-driver:\tamdgpu\ndrm-pdev:\t0000:03:00.0\ndrm-client-id:\t12\ndrm-memory-vram:\t1048576 KiB\ndrm-memory-gtt:\t2048 KiB\n");
+    write_file(root / "proc/4242/fdinfo/6", "drm-pdev:\t0000:03:00.0\ndrm-client-id:\t12\ndrm-memory-vram:\t1048576 KiB\n");
+    write_file(root / "proc/4242/fdinfo/7", "drm-pdev:\t0000:03:00.0\ndrm-client-id:\t13\ndrm-memory-vram:\t512 MiB\n");
+
+    using namespace pollen::linux_sensors;
+    CHECK(read_cpu_name(root) == "AMD Ryzen 7 5800X 8-Core Processor");
+    const auto mhz = read_cpu_mhz(root);
+    CHECK(mhz && std::fabs(*mhz - 4000.0) < 0.01);
+    const auto temp = read_cpu_temp(root);
+    CHECK(temp && std::fabs(*temp - 54.25) < 0.01);
+    CHECK(find_process(root, "VRChat.exe") == 4242);
+    const auto rss = read_process_rss(root, 4242);
+    CHECK(rss && *rss == 4194304.0 * 1024.0);
+    CHECK(pci_name(root, 0x1002, 0x73bf) == "AMD Radeon RX 6800/6800 XT / 6900 XT");
+    const auto vram = fdinfo_vram(root, 4242, "0000:03:00.0");
+    CHECK(vram && *vram == (1024.0 + 512.0) * 1024.0 * 1024.0);
+    CHECK(!fdinfo_vram(root, 4242, "0000:09:00.0"));
+    const auto gpu = read_drm_gpu(root);
+    CHECK(gpu && gpu->slot == "0000:03:00.0" && gpu->busy && *gpu->busy == 37.0 && gpu->temp && *gpu->temp == 61.0 && gpu->mhz && *gpu->mhz == 2100.0);
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+    pollen::Sampler sampler(root);
+    pollen::SensorSnapshot snap;
+    sampler.sample(snap);
+    write_file(root / "proc/stat", "cpu  150 0 150 900 0 0 0 0 0 0\n");
+    sampler.sample(snap);
+    CHECK(snap.cpu_percent && std::fabs(*snap.cpu_percent - 50.0) < 0.01);
+    CHECK(snap.ram_total && *snap.ram_total == 16000000.0 * 1024.0);
+    CHECK(snap.ram_used && *snap.ram_used == 12000000.0 * 1024.0);
+    CHECK(snap.ram_app && *snap.ram_app == 51200.0 * 1024.0);
+    CHECK(snap.vrchat_running && snap.ram_vrchat);
+    CHECK(snap.gpu_name == "AMD Radeon RX 6800/6800 XT / 6900 XT");
+    CHECK(snap.vram_total && snap.vram_used && snap.vram_vrchat);
+    CHECK(snap.uptime && *snap.uptime > 93784.0);
+#endif
+    fs::remove_all(root);
+}
+
+static void test_modules() {
+    using namespace pollen;
+    ModuleOptions o;
+    ModuleInputs in;
+    in.sensors.cpu_percent = 23.4;
+    in.sensors.cpu_mhz = 4210.0;
+    in.sensors.cpu_temp = 54.6;
+    in.sensors.cpu_name = "Ryzen";
+    in.sensors.ram_total = 16.0 * 1024 * 1024 * 1024;
+    in.sensors.ram_used = 6.0 * 1024 * 1024 * 1024;
+    in.sensors.ram_app = 200.0 * 1024 * 1024;
+    in.sensors.vram_total = 12.0 * 1024 * 1024 * 1024;
+    in.sensors.vram_used = 1.0 * 1024 * 1024 * 1024;
+    in.sensors.uptime = 93784.0;
+    in.connected_seconds = 3725.0;
+    std::tm t{};
+    t.tm_year = 126;
+    t.tm_mon = 9;
+    t.tm_mday = 28;
+    t.tm_hour = 15;
+    t.tm_min = 4;
+    t.tm_sec = 9;
+    t.tm_isdst = -1;
+    in.now = std::chrono::system_clock::from_time_t(std::mktime(&t));
+
+    StatusValues v = all_module_values(o, in);
+    CHECK(v["cpu"] == "23%");
+    CHECK(v["cpu_clock"] == "4.21 GHz");
+    CHECK(v["cpu_temp"] == "55\xc2\xb0" "C");
+    CHECK(v.count("cpu_threads") == 0);
+    CHECK(v["gpu_used"] == "1.0 GB" && v["gpu_total"] == "12.0 GB");
+    CHECK(render_status("{gpu_used} / {gpu_total}", v) == "1.0 GB / 12.0 GB");
+    CHECK(v["ram_used"] == "6.0 GB" && v["ram_total"] == "16.0 GB");
+    CHECK(v.count("ram_app") == 0);
+    CHECK(v["time"] == "3:04 PM");
+    CHECK(v.count("second") == 0 && v.count("time24") == 0);
+    CHECK(v["date"] == "October 28, 2026");
+    CHECK(v["uptime"] == "1d 2h 3m");
+    CHECK(v["connected"] == "1h 2m");
+    CHECK(render_status("{cpu_threads}", v) == "{cpu_threads}");
+
+    CHECK(set_option(o, "time", "hour24", "1"));
+    CHECK(set_option(o, "time", "seconds", "1"));
+    CHECK(set_option(o, "date", "month", "short"));
+    CHECK(set_option(o, "date", "format", "long_eu"));
+    CHECK(set_option(o, "ram", "percent", "1"));
+    CHECK(set_option(o, "ram", "app", "1"));
+    CHECK(set_option(o, "units", "bytes_unit", "MB"));
+    CHECK(set_option(o, "units", "bytes_decimals", "0"));
+    CHECK(set_option(o, "units", "temp_unit", "F"));
+    CHECK(set_option(o, "uptime", "seconds", "1"));
+    CHECK(set_option(o, "uptime", "style", "long"));
+    CHECK(set_option(o, "time", "tai", "1"));
+    CHECK(!set_option(o, "date", "month", "sideways"));
+    CHECK(!set_option(o, "nope", "x", "1"));
+    std::string error;
+    CHECK(set_option(o, "weather", "latitude", "123", &error));
+    CHECK(option_value(o, "weather", "latitude") == "90");
+    v = all_module_values(o, in);
+    CHECK(v["time"] == "15:04:09" && v["second"] == "09");
+    CHECK(v.count("ampm") == 0);
+    CHECK(v["date"] == "28 Oct 2026");
+    CHECK(v["ram_used"] == "38%" && v["ram_app"] == "1%" && v["ram_total"] == "16384 MB");
+    CHECK(v["gpu_used"] == "1024 MB");
+    CHECK(v["cpu_temp"] == "130\xc2\xb0" "F");
+    CHECK(v["uptime"] == "1 day, 2 hours, 3 minutes, 4 seconds");
+    CHECK(!v["tai"].empty() && v["tai"] != v["utc"]);
+
+    const auto enabled = enabled_placeholders(o);
+    CHECK(std::find(enabled.begin(), enabled.end(), "ram_app") != enabled.end());
+    CHECK(std::find(enabled.begin(), enabled.end(), "ampm") == enabled.end());
+    const ModuleDef* time = find_module("time");
+    CHECK(time && requirement_text(*time, time->placeholders[4]) == "Turn off \"24-hour clock\"");
+
+    ModuleInputs blank;
+    blank.now = in.now;
+    v = all_module_values(ModuleOptions{}, blank);
+    CHECK(render_status("{time}\nGPU {gpu_temp}", v) == "3:04 PM");
+    ModuleOptions dashes;
+    set_option(dashes, "units", "unknown", "-");
+    v = all_module_values(dashes, blank);
+    CHECK(render_status("GPU {gpu_temp}", v) == "GPU -");
+    pollen::StatusValues tidy{ { "a", "1" }, { "b", "" }, { "c", "3" } };
+    CHECK(render_status("x {a} \xc2\xb7 {b} \xc2\xb7 {c}", tidy) == "x 1 \xc2\xb7 3");
+    CHECK(render_status("{a} \xc2\xb7 {b}", tidy) == "1");
+    CHECK(render_status("{b} | {a}", tidy) == "1");
+    CHECK(render_status("{a} / {b}", tidy) == "1");
+    CHECK(render_status("-5 {a} -", tidy) == "-5 1 -");
+
+    CHECK(format_span(59, true, false, "clock") == "0:00");
+    CHECK(format_span(90061, false, true, "clock") == "25:01:01");
+}
+
+static void test_weather_parsing() {
+    using namespace pollen;
+    const std::string geo = "{\"results\":[{\"name\":\"Springfield\",\"latitude\":37.2,\"longitude\":-93.3,\"admin1\":\"Missouri\",\"country_code\":\"US\",\"country\":\"United States\"},"
+                            "{\"name\":\"Springfield\",\"latitude\":39.8,\"longitude\":-89.6,\"admin1\":\"Illinois\",\"country_code\":\"US\",\"country\":\"United States\"}]}";
+    const auto p = parse_geocode(geo, "Springfield, Illinois");
+    CHECK(p && p->name == "Springfield, Illinois" && std::fabs(p->latitude - 39.8) < 1e-9);
+    const auto first = parse_geocode(geo, "Springfield");
+    CHECK(first && first->name == "Springfield, Missouri");
+    std::string error;
+    CHECK(!parse_geocode("{}", "Nowhere", &error));
+    CHECK(error.find("Nowhere") != std::string::npos);
+    const std::string fc = "{\"latitude\":41.875,\"current_units\":{\"temperature_2m\":\"\xc2\xb0" "C\"},\"current\":{\"time\":\"2026-10-28T10:00\",\"interval\":900,\"temperature_2m\":12.4,\"apparent_temperature\":10.1,\"relative_humidity_2m\":71,\"weather_code\":61,\"wind_speed_10m\":18.0,\"is_day\":1}}";
+    const auto w = parse_forecast(fc, &error);
+    CHECK(w && w->ok && w->code == 61 && w->humidity == 71.0);
+    CHECK(weather_condition(61) == "Light rain");
+    CHECK(!parse_forecast("{\"error\":true,\"reason\":\"Latitude must be in range\"}", &error));
+    CHECK(error == "Latitude must be in range");
+    CHECK(url_encode("San Jos\xc3\xa9 CA") == "San%20Jos%C3%A9%20CA");
+
+    ModuleOptions o;
+    set_option(o, "weather", "wind", "1");
+    set_option(o, "weather", "wind_unit", "mph");
+    set_option(o, "units", "temp_unit", "F");
+    ModuleInputs in;
+    in.weather = *w;
+    in.weather.place = "Chicago, Illinois";
+    StatusValues v;
+    module_values(*find_module("weather"), o, in, v);
+    CHECK(v["weather_temp"] == "54\xc2\xb0" "F");
+    CHECK(v["weather_wind"] == "11 mph");
+    CHECK(v.count("weather_place") == 0);
+}
+
+static void test_rotation_without_sending() {
+    pollen::StatusRotation r;
+    r.set_template("a\n---\nb\n---\nc");
+    const pollen::StatusValues v;
+    const auto base = std::chrono::steady_clock::time_point(std::chrono::seconds(300));
+    std::set<std::string> seen;
+    for (int i = 0; i < 3; ++i) seen.insert(r.showing(v, base + std::chrono::seconds(3 * i), 3.0, false));
+    CHECK(seen.size() == 3);
+    const auto now = std::chrono::steady_clock::now();
+    CHECK(r.next(v, now) == "a");
+    CHECK(r.showing(v, now, 3.0, true) == "a");
+    CHECK(r.next(v, now) == "b");
+    CHECK(r.showing(v, now + std::chrono::seconds(30), 3.0, true) == "b");
+}
+
+static void test_weather_fetch() {
+    namespace http = fizmo::networking::http;
+    if (!fizmo::networking::background_running()) fizmo::networking::start_background(1);
+    std::atomic<int> geocodes{ 0 }, forecasts{ 0 };
+    std::string last_url;
+    std::mutex url_mutex;
+    http::Server server = http::create_server([&](http::IncomingMessage req, http::ServerResponse res) {
+        {
+            std::lock_guard<std::mutex> lock(url_mutex);
+            last_url = req.url();
+        }
+        if (req.path() == "/search") {
+            ++geocodes;
+            res.json("{\"results\":[{\"name\":\"Chicago\",\"latitude\":41.85,\"longitude\":-87.65,\"admin1\":\"Illinois\",\"country_code\":\"US\"}]}");
+        } else {
+            ++forecasts;
+            res.json("{\"current\":{\"temperature_2m\":3.5,\"apparent_temperature\":0.2,\"relative_humidity_2m\":80,\"weather_code\":71,\"wind_speed_10m\":20,\"is_day\":0}}");
+        }
+    });
+    std::promise<void> ready;
+    server.listen(0, "127.0.0.1", [&ready] { ready.set_value(); });
+    if (ready.get_future().wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+        std::printf("  skipped weather fetch: test server didn't start\n");
+        return;
+    }
+    const std::string base = "http://127.0.0.1:" + std::to_string(server.port());
+    pollen::Weather weather;
+    pollen::WeatherConfig c;
+    c.city = "Chicago, IL";
+    c.forecast_url = base + "/forecast";
+    c.geocode_url = base + "/search";
+    weather.configure(c);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    pollen::WeatherSnapshot w;
+    while (std::chrono::steady_clock::now() < deadline) {
+        w = weather.snapshot();
+        if (w.ok || (!w.loading && !w.error.empty())) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (!w.ok) std::printf("  weather error: %s\n", w.error.c_str());
+    CHECK(w.ok && w.code == 71 && !w.is_day && w.place == "Chicago, Illinois");
+    CHECK(geocodes.load() == 1 && forecasts.load() == 1);
+    {
+        std::lock_guard<std::mutex> lock(url_mutex);
+        CHECK(last_url.find("latitude=41.8500") != std::string::npos);
+    }
+    weather.stop();
+    server.close();
 }
 
 int main() {
@@ -443,6 +719,11 @@ int main() {
     test_mdns_messages();
     test_query_server();
     test_query_discovery();
+    test_fake_linux_sensors();
+    test_modules();
+    test_weather_parsing();
+    test_rotation_without_sending();
+    test_weather_fetch();
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

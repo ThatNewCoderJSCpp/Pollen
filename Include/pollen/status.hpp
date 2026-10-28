@@ -25,6 +25,8 @@ public:
     bool due(std::chrono::steady_clock::time_point now, double interval_seconds) const;
     std::string next(const StatusValues& values, std::chrono::steady_clock::time_point now);
     std::string peek(const StatusValues& values) const;
+    std::string showing(const StatusValues& values, std::chrono::steady_clock::time_point now, double interval_seconds, bool sending) const;
+    bool sent() const noexcept { return m_sent; }
     void reset() noexcept;
     std::size_t index() const noexcept { return m_index; }
 

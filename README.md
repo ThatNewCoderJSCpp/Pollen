@@ -8,12 +8,15 @@ Most VRChat OSC tools only run on Windows. Pollen's backend is plain C++17 over 
 
 - **Dashboard**: connection state, which avatar you're in, traffic counters, CPU, RAM and what's playing.
 - **Parameters**: every parameter of the current avatar (read from VRChat's OSC file and from what VRChat sends), with switches for bools, number boxes for ints and sliders for floats. Values update live.
-- **Chatbox**: send messages, with the typing bubble and the notification sound if you want them, and **status messages** that rotate on a timer, with placeholders like `{time}`, `{cpu}`, `{ram}` and `{song}`.
+- **Chatbox**: send messages, with the typing bubble and the notification sound if you want them, and **status messages** that rotate on a timer, built from placeholders like `{time}`, `{cpu_temp}`, `{gpu_used} / {gpu_total}` and `{song}`.
+- **Modules**: every kind of placeholder (Units, CPU, GPU, RAM, VRAM, Uptime, Time, Date, Now playing, Weather, Avatar) has its own card. Opening one shows its options, a box to try it out with a live preview of just that module, and its placeholders; turning an option on (seconds, say) unlocks its placeholder (`{second}`). Each placeholder is a single value, so `{gpu_used} / {gpu_total}` reads `1.0 GB / 12.0 GB`. Sizes can be shown in B, KB, MB, GB or TB everywhere, and memory amounts as percentages.
 - **Monitor**: every OSC message in and out, plus a box for sending any message by hand (`/avatar/parameters/Ears true`).
 - **Settings**: VRChat's address and ports, and an extra OSC folder if Pollen can't find VRChat's by itself.
 
 - **OSCQuery**: Pollen and VRChat find each other on their own. Pollen advertises itself over mDNS, VRChat sends to whatever port Pollen listens on (so if another app already has 9001, Pollen takes a free port and nothing breaks), and Pollen reads the current avatar's parameters, types and values straight from VRChat.
 - **What VRChat shows**: a preview of the chatbox bubble as you type, with the typing dots, trimmed to VRChat's 144 characters and 9 lines.
+
+Hardware readings come from `/proc`, `/sys` (hwmon, amdgpu, cpufreq) and NVIDIA's NVML on Linux, and from performance counters, DXGI and NVML on Windows. Weather comes from [Open-Meteo](https://open-meteo.com), which needs no account or key.
 
 Now playing uses `playerctl` (MPRIS) on Linux, which covers Spotify, browsers, mpv and most players, and Windows' media session API on Windows 10 and 11, which covers anything that shows up in the volume flyout. On Linux, Pollen also finds VRChat's OSC folder inside Proton's prefix in every Steam library (including Flatpak and Snap Steam), for when OSCQuery isn't available.
 

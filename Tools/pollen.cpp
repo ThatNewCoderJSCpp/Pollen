@@ -154,6 +154,17 @@ private:
         f.push_back(np.playing ? "playing" : (np.paused ? "paused" : "stopped"));
         f.push_back(clean(np.player));
         f.push_back(clean(np.reason));
+        const pollen::SensorSnapshot sn = m_session.sensors();
+        const pollen::Units units = pollen::units_of(m_session.settings().modules);
+        f.push_back(sn.gpu_percent ? number(*sn.gpu_percent, 0) + "%" : std::string("-"));
+        f.push_back(sn.vram_used && sn.vram_total ? pollen::format_bytes(*sn.vram_used, units) + " of " + pollen::format_bytes(*sn.vram_total, units) : std::string());
+        f.push_back(clean(sn.gpu_name));
+        f.push_back(clean(sn.cpu_name));
+        f.push_back(s.memory_known ? pollen::format_bytes(static_cast<double>(s.memory_used), units) + " of " + pollen::format_bytes(static_cast<double>(s.memory_total), units) : std::string());
+        std::string warning = m_session.module_warning("cpu");
+        const std::string gpu_warning = m_session.module_warning("gpu");
+        if (!gpu_warning.empty()) warning += (warning.empty() ? "" : " ") + gpu_warning;
+        f.push_back(clean(warning));
         std::string line;
         for (std::size_t i = 0; i < f.size(); ++i) {
             if (i) line += '\t';
@@ -297,10 +308,101 @@ private:
             if (!m_session.send_status_now()) return std::string("error\tnothing to send (is it connected, and is the template empty?)");
             return std::string("ok");
         });
-        native("placeholders", [](const std::vector<std::string>&) {
+        native("placeholders", [this](const std::vector<std::string>&) {
             std::string out;
-            for (const std::string& p : pollen::status_placeholders()) out += "{" + p + "}\n";
+            const pollen::ModuleOptions& opts = m_session.settings().modules;
+            for (const pollen::ModuleDef& m : pollen::module_defs()) {
+                for (const pollen::PlaceholderDef& p : m.placeholders) {
+                    if (pollen::placeholder_enabled(opts, m, p)) out += "{" + p.name + "}\t" + clean(m.title + ": " + p.description) + "\n";
+                }
+            }
             return out;
+        });
+        native("modules", [this](const std::vector<std::string>&) {
+            std::string out;
+            const pollen::ModuleOptions& opts = m_session.settings().modules;
+            for (const pollen::ModuleDef& m : pollen::module_defs()) {
+                std::size_t on = 0;
+                for (const pollen::PlaceholderDef& p : m.placeholders) on += pollen::placeholder_enabled(opts, m, p) ? 1 : 0;
+                std::string sample = m_session.module_preview(m.id, m_session.module_template(m.id));
+                if (sample.empty()) sample = "(nothing to show right now)";
+                out += m.id + "\t" + m.icon + "\t" + clean(m.title) + "\t" + clean(m.description) + "\t" + escape_lines(sample) + "\t" + std::to_string(on) + "\t" + std::to_string(m.placeholders.size()) + "\n";
+            }
+            return out;
+        });
+        native("module_options", [this](const std::vector<std::string>& args) {
+            const pollen::ModuleDef* m = pollen::find_module(arg(args, 0));
+            if (!m) return std::string();
+            std::string out;
+            for (const pollen::OptionDef& o : m->options) {
+                if (!pollen::option_visible(m_session.settings().modules, *m, o)) continue;
+                const char* kind = "bool";
+                switch (o.kind) {
+                case pollen::OptionKind::Bool: kind = "bool"; break;
+                case pollen::OptionKind::Choice: kind = "choice"; break;
+                case pollen::OptionKind::Text: kind = "text"; break;
+                case pollen::OptionKind::Integer: kind = "integer"; break;
+                case pollen::OptionKind::Float: kind = "float"; break;
+                }
+                std::string choices;
+                for (const auto& c : o.choices) choices += (choices.empty() ? "" : "|") + c.first + "=" + c.second;
+                out += std::string(kind) + "\t" + o.id + "\t" + clean(o.label) + "\t" + clean(pollen::option_value(m_session.settings().modules, m->id, o.id)) + "\t" + clean(o.hint) + "\t" + clean(choices) + "\t" + number(o.min, 6) + "\t" + number(o.max, 6) + "\n";
+            }
+            return out;
+        });
+        native("module_set", [this](const std::vector<std::string>& args) {
+            const auto f = fields_of(args);
+            std::string why;
+            if (!m_session.set_module_option(arg(f, 0), arg(f, 1), arg(f, 2), &why)) return "error\t" + clean(why);
+            return std::string("ok");
+        });
+        native("module_placeholders", [this](const std::vector<std::string>& args) {
+            const pollen::ModuleDef* m = pollen::find_module(arg(args, 0));
+            if (!m) return std::string();
+            std::string out;
+            for (const pollen::PlaceholderDef& p : m->placeholders) {
+                const bool on = pollen::placeholder_enabled(m_session.settings().modules, *m, p);
+                out += p.name + "\t" + clean(p.description) + "\t" + (on ? "1" : "0") + "\t" + clean(pollen::requirement_text(*m, p)) + "\n";
+            }
+            return out;
+        });
+        native("module_title", [](const std::vector<std::string>& args) {
+            const pollen::ModuleDef* m = pollen::find_module(arg(args, 0));
+            return m ? m->icon + "\t" + m->title + "\t" + m->description : std::string();
+        });
+        native("module_template", [this](const std::vector<std::string>& args) {
+            return escape_lines(m_session.module_template(arg(args, 0)));
+        });
+        native("module_template_set", [this](const std::vector<std::string>& args) {
+            const auto f = fields_of(args);
+            std::string text = arg(f, 1);
+            for (std::size_t i = 2; i < f.size(); ++i) text += "\t" + f[i];
+            std::string why;
+            if (!m_session.set_module_template(arg(f, 0), text, &why)) return "error\t" + clean(why);
+            return std::string("ok");
+        });
+        native("module_preview", [this](const std::vector<std::string>& args) {
+            const auto f = fields_of(args);
+            std::string text = arg(f, 1);
+            for (std::size_t i = 2; i < f.size(); ++i) text += "\t" + f[i];
+            return m_session.module_preview(arg(f, 0), text);
+        });
+        native("module_status", [this](const std::vector<std::string>& args) {
+            return m_session.module_status(arg(args, 0));
+        });
+        native("module_warning", [this](const std::vector<std::string>& args) {
+            return m_session.module_warning(arg(args, 0));
+        });
+        native("status_append", [this](const std::vector<std::string>& args) {
+            std::string text = arg(args, 0);
+            for (std::size_t i = 1; i < args.size(); ++i) text += "\t" + args[i];
+            std::string tpl = m_session.settings().status_template;
+            while (!tpl.empty() && tpl.back() == '\n') tpl.pop_back();
+            tpl += tpl.empty() ? text : "\n" + text;
+            m_session.set_status_template(tpl);
+            std::string why;
+            if (!m_session.save_settings(&why)) return "error\t" + clean(why);
+            return escape_lines(tpl);
         });
         native("log", [this](const std::vector<std::string>& args) {
             const std::uint64_t since = std::strtoull(arg(args, 0).c_str(), nullptr, 10);

@@ -72,6 +72,16 @@ std::string Settings::to_json() const {
     root.set("status_interval", status_interval);
     root.set("status_notify", status_notify);
     root.set("log_parameters", log_parameters);
+    fizmo::json::Value mods = fizmo::json::Value::object();
+    for (const auto& m : modules) {
+        fizmo::json::Value opts = fizmo::json::Value::object();
+        for (const auto& o : m.second) opts.set(o.first, o.second);
+        mods.set(m.first, opts);
+    }
+    root.set("modules", mods);
+    fizmo::json::Value templates = fizmo::json::Value::object();
+    for (const auto& t : module_templates) templates.set(t.first, t.second);
+    root.set("module_templates", templates);
     return root.dump(2) + "\n";
 }
 
@@ -95,6 +105,15 @@ bool Settings::from_json(const std::string& text, std::string* error) {
     if (status_interval < 2.0) status_interval = 2.0;
     status_notify = root["status_notify"].as_bool(status_notify);
     log_parameters = root["log_parameters"].as_bool(log_parameters);
+    for (const auto& m : root["modules"].members()) {
+        for (const auto& o : m.second.members()) {
+            if (o.second.is_string()) modules[m.first][o.first] = o.second.as_string();
+            else if (o.second.is_bool()) modules[m.first][o.first] = o.second.as_bool() ? "1" : "0";
+        }
+    }
+    for (const auto& t : root["module_templates"].members()) {
+        if (t.second.is_string()) module_templates[t.first] = t.second.as_string();
+    }
     return true;
 }
 

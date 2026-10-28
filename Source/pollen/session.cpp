@@ -30,33 +30,6 @@ std::string show_value(const osc::Value& v) {
     return v.to_string();
 }
 
-std::tm local_now() {
-    const std::time_t t = std::time(nullptr);
-    std::tm out{};
-#if defined(_WIN32)
-    localtime_s(&out, &t);
-#else
-    localtime_r(&t, &out);
-#endif
-    return out;
-}
-
-std::string strftime_text(const char* format) {
-    const std::tm tm = local_now();
-    char buf[64];
-    const std::size_t n = std::strftime(buf, sizeof(buf), format, &tm);
-    return std::string(buf, n);
-}
-
-std::string twelve_hour() {
-    const std::tm tm = local_now();
-    int h = tm.tm_hour % 12;
-    if (h == 0) h = 12;
-    char buf[16];
-    std::snprintf(buf, sizeof(buf), "%d:%02d %s", h, tm.tm_min, tm.tm_hour < 12 ? "AM" : "PM");
-    return buf;
-}
-
 bool parse_token(const std::string& token, bool quoted, osc::Value& out, std::string* error) {
     if (quoted) {
         out = osc::Value(token);
@@ -215,12 +188,16 @@ Session::Session(fs::path settings_path) : m_settings_path(std::move(settings_pa
         if (m_link.running()) m_link.request_avatar();
     };
     m_media.start(2.0);
+    m_sensors.start(1.0);
+    m_weather.configure(weather_config(m_settings.modules));
     if (m_settings.auto_connect) connect();
 }
 
 Session::~Session() {
     if (m_typing) typing(false);
     m_link.stop();
+    m_weather.stop();
+    m_sensors.stop();
     m_media.stop();
     m_connection.stop();
 }
@@ -337,6 +314,9 @@ void Session::tick() {
         m_stats.update();
         m_last_stats = now;
     }
+    const bool hearing = m_connection.hearing_vrchat();
+    if (hearing && !m_heard) m_heard_since = now;
+    m_heard = hearing;
     if (m_settings.status_enabled && m_connection.sending()) {
         const double interval = m_settings.status_interval < 2.0 ? 2.0 : m_settings.status_interval;
         if (m_status.due(now, interval)) {
@@ -405,43 +385,99 @@ void Session::set_status_template(const std::string& text) {
 }
 
 StatusValues Session::status_values() {
-    StatusValues v;
-    v["time"] = twelve_hour();
-    v["time24"] = strftime_text("%H:%M");
-    v["date"] = strftime_text("%Y-%m-%d");
-    v["weekday"] = strftime_text("%A");
-    const SystemSnapshot& s = m_stats.snapshot();
-    char buf[32];
-    if (s.cpu_known) {
-        std::snprintf(buf, sizeof(buf), "%.0f%%", s.cpu_percent);
-        v["cpu"] = buf;
-    } else {
-        v["cpu"] = "";
+    return all_module_values(m_settings.modules, module_inputs());
+}
+
+double Session::connected_seconds() const {
+    if (!m_heard) return -1.0;
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - m_heard_since).count();
+}
+
+ModuleInputs Session::module_inputs() const {
+    ModuleInputs in;
+    in.sensors = m_sensors.snapshot();
+    in.media = m_media.now_playing();
+    in.weather = m_weather.snapshot();
+    in.avatar_name = avatar_name();
+    in.avatar_id = m_connection.avatar().avatar_id();
+    const auto& config = m_connection.avatar().config();
+    in.params = config && !config->parameters.empty() ? config->parameters.size() : m_connection.avatar().live().size();
+    in.connected_seconds = connected_seconds();
+    in.app_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_started).count();
+    in.now = std::chrono::system_clock::now();
+    return in;
+}
+
+std::string Session::module_preview(const std::string& module, const std::string& text) const {
+    const ModuleDef* def = find_module(module);
+    if (!def) return std::string();
+    StatusValues values;
+    if (module == "units") values = all_module_values(m_settings.modules, module_inputs());
+    else module_values(*def, m_settings.modules, module_inputs(), values);
+    return render_status(text, values);
+}
+
+std::string Session::module_status(const std::string& module) const {
+    if (module == "weather") {
+        const WeatherSnapshot w = m_weather.snapshot();
+        if (w.ok) return "Weather for " + w.place;
+        if (w.loading && w.error.empty()) return "Checking the weather...";
+        return w.error.empty() ? std::string("Set a city or a latitude and longitude") : "Weather: " + w.error;
     }
-    if (s.memory_known) {
-        std::snprintf(buf, sizeof(buf), "%.0f%%", s.memory_percent());
-        v["ram"] = buf;
-        v["ram_used"] = format_bytes(s.memory_used);
-        v["ram_total"] = format_bytes(s.memory_total);
-    } else {
-        v["ram"] = v["ram_used"] = v["ram_total"] = "";
+    const SensorSnapshot s = m_sensors.snapshot();
+    if (module == "gpu" || module == "vram") {
+        std::string out = s.gpu_name.empty() ? std::string("No GPU readings found") : "Reading " + s.gpu_name + (s.gpu_source.empty() ? std::string() : " through " + s.gpu_source);
+        if (!s.vrchat_running) out += ". VRChat isn't running, so its values are blank";
+        if (!s.notes.empty()) out += ". Note: " + s.notes;
+        return out;
     }
-    v["uptime"] = format_duration(s.uptime_seconds);
-    const NowPlaying np = m_media.now_playing();
-    const bool show = np.has_song() && (np.playing || np.paused);
-    v["song"] = show ? np.song() : "";
-    v["artist"] = show ? np.artist : "";
-    v["title"] = show ? np.title : "";
-    v["player"] = show ? np.player : "";
-    v["media"] = show ? std::string(np.playing ? "\xe2\x96\xb6 " : "\xe2\x8f\xb8 ") + np.song() : "";
-    v["avatar"] = avatar_name();
-    v["params"] = std::to_string(m_connection.avatar().live().size());
-    return v;
+    if (module == "cpu") {
+        std::string out = s.cpu_name.empty() ? std::string() : "Reading " + s.cpu_name;
+        if (!s.cpu_temp) out += std::string(out.empty() ? "" : ". ") + "No temperature sensor found";
+        return out;
+    }
+    if (module == "ram" && !s.vrchat_running) return "VRChat isn't running, so its value is blank";
+    if (module == "media") {
+        const NowPlaying np = m_media.now_playing();
+        if (!np.available || !np.has_song()) return np.reason;
+    }
+    return std::string();
+}
+
+std::string Session::module_warning(const std::string& module) const {
+    const SensorSnapshot s = m_sensors.snapshot();
+    if (module == "cpu" && option_on(m_settings.modules, "cpu", "temp")) return s.cpu_temp_help;
+    if (module == "gpu" && option_on(m_settings.modules, "gpu", "temp")) return s.gpu_temp_help;
+    return std::string();
+}
+
+bool Session::set_module_option(const std::string& module, const std::string& option, const std::string& value, std::string* error) {
+    if (!set_option(m_settings.modules, module, option, value, error)) return false;
+    if (module == "weather") m_weather.configure(weather_config(m_settings.modules));
+    return save_settings(error);
+}
+
+std::string Session::module_template(const std::string& module) const {
+    const auto it = m_settings.module_templates.find(module);
+    if (it != m_settings.module_templates.end()) return it->second;
+    const ModuleDef* def = find_module(module);
+    return def ? def->example : std::string();
+}
+
+bool Session::set_module_template(const std::string& module, const std::string& text, std::string* error) {
+    if (!find_module(module)) {
+        if (error) *error = "no module called " + module;
+        return false;
+    }
+    m_settings.module_templates[module] = text;
+    return save_settings(error);
 }
 
 std::string Session::status_preview() {
     m_status.set_template(m_settings.status_template);
-    return vrc::chatbox_text(m_status.peek(status_values()));
+    const double interval = m_settings.status_interval < 2.0 ? 2.0 : m_settings.status_interval;
+    const bool sending = m_settings.status_enabled && m_connection.sending();
+    return vrc::chatbox_text(m_status.showing(status_values(), std::chrono::steady_clock::now(), interval, sending));
 }
 
 bool Session::send_status_now() {

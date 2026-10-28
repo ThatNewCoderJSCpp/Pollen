@@ -16,6 +16,7 @@
             <button class="tab" to="home">Dashboard</button>
             <button class="tab" to="params">Parameters</button>
             <button class="tab" to="chat">Chatbox</button>
+            <button class="tab" to="modules">Modules</button>
             <button class="tab" to="monitor">Monitor</button>
             <button class="tab" to="settings">Settings</button>
             <text id="version" class="muted version"></text>
@@ -62,10 +63,16 @@
                         <div class="card-title">This computer</div>
                         <row class="stats">
                             <column class="stat"><div id="sys-cpu" class="stat-num">-</div><div class="stat-label">CPU</div></column>
+                            <column class="stat"><div id="sys-gpu" class="stat-num">-</div><div class="stat-label">GPU</div></column>
                             <column class="stat"><div id="sys-ram" class="stat-num">-</div><div class="stat-label">RAM</div></column>
                             <column class="stat"><div id="sys-up" class="stat-num small">-</div><div class="stat-label">uptime</div></column>
                         </row>
+                        <row class="kv"><text class="k">CPU</text><text id="sys-cpu-name" class="v">-</text></row>
+                        <row class="kv"><text class="k">GPU</text><text id="sys-gpu-name" class="v">-</text></row>
+                        <row class="kv"><text class="k">Memory</text><text id="sys-mem" class="v">-</text></row>
+                        <row class="kv"><text class="k">Video memory</text><text id="sys-vram" class="v">-</text></row>
                         <row class="kv"><text class="k">Now playing</text><text id="sys-song" class="v">-</text></row>
+                        <div id="sys-warning" class="warning hidden"></div>
                     </column>
                 </row>
                 <column class="card hint-card">
@@ -134,7 +141,7 @@
                         <div class="grow"></div>
                         <input_bool id="status-on" switch>Send automatically</input_bool>
                     </row>
-                    <p class="hint">Pollen sends this to the chatbox on a timer. Put a line with only --- between messages to rotate through them. A line whose placeholders are all empty is left out, so a song line disappears when nothing is playing.</p>
+                    <p class="hint">Pollen sends this to the chatbox on a timer. Put a line with only --- between messages to rotate through them. A line whose placeholders are all empty is left out, so a song line disappears when nothing is playing. Click a placeholder to add it, and open the Modules tab for more.</p>
                     <input_code id="status-template" class="template" language="text" line-numbers="false" autocomplete="false"></input_code>
                     <row class="placeholders" id="placeholders"></row>
                     <row class="compose-meta">
@@ -150,6 +157,38 @@
                 </column>
             </column>
         </page>
+
+        <page id="modules">
+            <column class="scroll page-body">
+                <p class="hint">Each module gives you placeholders for status messages. Every placeholder is one value on its own, so you decide how they're put together, like {gpu_used} / {gpu_total}. Open a module to choose what it shows and try it out.</p>
+                <row id="module-grid" class="module-grid"></row>
+            </column>
+        </page>
+
+        <modal id="module-modal">
+            <row class="modal-head">
+                <text id="mm-icon" class="mm-icon"></text>
+                <column class="grow">
+                    <div id="mm-title" class="big"></div>
+                    <div id="mm-desc" class="muted"></div>
+                </column>
+                <button class="ghost" to="close">Done</button>
+            </row>
+            <column class="modal-body">
+                <div class="sub-title">Options</div>
+                <column id="mm-options" class="mm-options"></column>
+                <div class="sub-title">Try it</div>
+                <input_code id="mm-template" class="mm-template" language="text" line-numbers="false" autocomplete="false"></input_code>
+                <div id="mm-warning" class="warning hidden"></div>
+                <row id="mm-chips" class="placeholders"></row>
+                <pre id="mm-preview" class="preview"></pre>
+                <div id="mm-status" class="mm-status"></div>
+                <row class="actions">
+                    <button id="mm-add" class="primary">Add this to my status message</button>
+                    <text id="mm-note" class="muted"></text>
+                </row>
+            </column>
+        </modal>
 
         <page id="monitor">
             <row class="toolbar">

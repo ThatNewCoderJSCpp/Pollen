@@ -403,6 +403,7 @@ input_bool {
 }
 
 .chip {
+    border-width: 1px;
     background: var(--panel);
     border-color: var(--line);
     color: var(--teal);
@@ -500,7 +501,7 @@ input_bool {
 }
 
 .scene {
-    height: 230px;
+    height: 170px;
     align: center;
     gap: 8px;
     border-radius: 10px;
@@ -550,4 +551,159 @@ input_bool {
     border-radius: 999px;
     padding: 3px 14px;
     font-size: 12px;
+}
+
+.module-grid {
+    gap: 14px;
+    row-gap: 14px;
+    flex-wrap: wrap;
+}
+
+.module-card {
+    width: 250px;
+    min-height: 150px;
+    background: var(--card);
+    border-color: var(--line);
+    border-width: 1px;
+    border-radius: 12px;
+    padding: 14px 16px;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+
+    &:hover {
+        background: var(--raised);
+        border-color: var(--accent);
+    }
+}
+
+.module-head {
+    gap: 8px;
+    align-items: center;
+}
+
+.module-icon {
+    color: var(--accent);
+    font-size: 18px;
+}
+
+.module-title {
+    font-size: 16px;
+    font-weight: bold;
+}
+
+.module-desc {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.module-sample {
+    background: var(--panel);
+    border-radius: 8px;
+    padding: 6px 10px;
+    white-space: pre-wrap;
+    font-size: 12px;
+}
+
+.module-count {
+    color: var(--teal);
+    font-size: 11px;
+}
+
+#module-modal {
+    width: 780px;
+    max-width: 94vwidth;
+    background: var(--card);
+    border-color: var(--line);
+    border-width: 1px;
+    border-radius: 14px;
+    padding: 0;
+}
+
+.modal-head {
+    gap: 12px;
+    align-items: center;
+    padding: 14px 18px;
+    border-color: var(--line);
+    border-width: 0 0 1px 0;
+}
+
+.mm-icon {
+    font-size: 26px;
+    color: var(--accent);
+}
+
+.modal-body {
+    max-height: 74vheight;
+    overflow: auto;
+    padding: 12px 18px 16px 18px;
+    gap: 8px;
+}
+
+.mm-options {
+    gap: 8px;
+}
+
+.mm-options > input_bool {
+    margin: 3px 0;
+}
+
+.modal-body > .sub-title {
+    margin: 10px 0 2px 0;
+    font-weight: bold;
+}
+
+.mm-option {
+    gap: 12px;
+    align-items: center;
+}
+
+.mm-label {
+    width: 220px;
+    color: var(--text);
+}
+
+.mm-hint {
+    color: var(--muted);
+    font-size: 11px;
+    margin: -2px 0 4px 0;
+}
+
+.mm-input {
+    width: 240px;
+}
+
+.mm-template {
+    height: 90px;
+    font-family: monospace;
+}
+
+.mm-status {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.chip {
+    cursor: pointer;
+
+    &:hover {
+        border-color: var(--teal);
+    }
+}
+
+.chip.off {
+    color: #5f5a6b;
+    border-color: var(--panel);
+    text-decoration: line-through;
+}
+
+.warning {
+    background: #3a2f12;
+    border-color: #f9e2af55;
+    border-width: 1px;
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: var(--warn);
+    font-size: 12px;
+    white-space: pre-wrap;
 }

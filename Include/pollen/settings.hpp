@@ -4,6 +4,7 @@
 #include <osc/vrchat/vrchat.hpp>
 
 #include <filesystem>
+#include <map>
 #include <string>
 
 namespace pollen {
@@ -23,6 +24,9 @@ struct Settings {
     bool status_notify = false;
 
     bool log_parameters = false;
+
+    std::map<std::string, std::map<std::string, std::string>> modules;
+    std::map<std::string, std::string> module_templates;
 
     osc::vrchat::ConnectionSettings connection() const;
 
