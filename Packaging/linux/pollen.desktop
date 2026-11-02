@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Pollen
+GenericName=VRChat OSC App
+Comment=Send and receive VRChat OSC messages
+Exec=pollen
+Icon=pollen
+Terminal=false
+Categories=Utility;

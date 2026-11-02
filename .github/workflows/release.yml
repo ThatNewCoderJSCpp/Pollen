@@ -44,7 +44,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build pkg-config file xvfb \
+          sudo apt-get install -y ninja-build pkg-config file xvfb rpm dpkg-dev desktop-file-utils \
             libx11-dev libxft-dev libxrender-dev libfontconfig1-dev libfreetype-dev \
             libssl-dev libpango1.0-dev libcairo2-dev zlib1g-dev libjpeg-dev \
             libvulkan-dev libgl-dev
@@ -101,10 +101,98 @@ jobs:
             exit 1
           fi
 
+      - name: Test the .deb
+        run: |
+          sudo apt-get install -y ./build/Pollen-*.deb
+          for exe in pollen; do test -L /usr/bin/$exe; done
+          desktop-file-validate /usr/share/applications/pollen.desktop
+          test -f /usr/share/icons/hicolor/scalable/apps/pollen.svg
+          test -f /usr/share/icons/hicolor/512x512/apps/pollen.png
+          pollen --version
+          env -i PATH=/usr/bin:/bin HOME=$RUNNER_TEMP/deb-home pollen --check | tee deb-check.txt
+          grep "built-in window ok, 1 compiled script" deb-check.txt
+          sudo apt-get remove -y pollen
+          for exe in pollen; do test ! -e /usr/bin/$exe; done
+          test ! -e /usr/share/applications/pollen.desktop
+          test ! -e /opt/pollen/pollen
+
+      - name: Check the .rpm
+        run: |
+          rpm -qpi build/Pollen-*.rpm
+          rpm -qpl build/Pollen-*.rpm | tee rpm-files.txt
+          for exe in pollen; do grep -x /opt/pollen/$exe rpm-files.txt; done
+          grep -x /opt/pollen/share/applications/pollen.desktop rpm-files.txt
+          rpm -qp --scripts build/Pollen-*.rpm
+
       - uses: actions/upload-artifact@v4
         with:
           name: pollen-linux-${{ matrix.arch }}
-          path: build/Pollen-*.tar.gz
+          path: |
+            build/Pollen-*.tar.gz
+            build/Pollen-*.tar.xz
+            build/Pollen-*.zip
+            build/Pollen-*.deb
+            build/Pollen-*.rpm
+          compression-level: 0
+          if-no-files-found: error
+
+  linux-i686:
+    name: Linux i686
+    needs: version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build, test and package in a 32-bit container
+        run: |
+          docker run --rm --platform linux/386 -v "$PWD:/src" -w /src i386/debian:bookworm bash -euo pipefail -c '
+            apt-get update
+            apt-get install -y --no-install-recommends ca-certificates curl git g++ cmake ninja-build pkg-config file binutils \
+              rpm dpkg-dev xz-utils zip unzip desktop-file-utils \
+              libx11-dev libxft-dev libxrender-dev libfontconfig-dev libfreetype-dev \
+              libssl-dev libpango1.0-dev libcairo2-dev zlib1g-dev libjpeg-dev \
+              libvulkan-dev libgl-dev
+            lib=/usr/lib/$(gcc -print-multiarch)
+            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPOLLEN_PACKAGE=ON -DFIZMO_TUNE=OFF \
+              -DPOLLEN_PACKAGE_PLATFORM=linux-i686 \
+              -DJPEG_LIBRARY=$lib/libjpeg.a -DJPEG_LIBRARY_RELEASE=$lib/libjpeg.a \
+              -DZLIB_LIBRARY=$lib/libz.a -DZLIB_LIBRARY_RELEASE=$lib/libz.a
+            cmake --build build -j 4
+            (cd build && ctest --output-on-failure --timeout 600)
+            for exe in build/bin/pollen; do
+              readelf -d $exe | grep NEEDED
+              if readelf -d $exe | grep NEEDED | grep -E "libjpeg|libz\.|libstdc\+\+|libgcc_s"; then
+                echo "::error::$exe links to a library users may not have"
+                exit 1
+              fi
+            done
+            (cd build && cpack)
+            mkdir -p smoke
+            tar -xzf build/Pollen-*.tar.gz -C smoke
+            app=$(echo /src/smoke/Pollen-*)
+            "$app/pollen" --version
+            HOME=/tmp/archive-home "$app/pollen" --check | tee /tmp/check.txt
+            grep "built-in window ok, 1 compiled script" /tmp/check.txt
+            apt-get install -y ./build/Pollen-*.deb
+            for exe in pollen; do test -L /usr/bin/$exe; done
+            desktop-file-validate /usr/share/applications/pollen.desktop
+            HOME=/tmp/deb-home pollen --check | grep "built-in window ok, 1 compiled script"
+            apt-get remove -y pollen
+            for exe in pollen; do test ! -e /usr/bin/$exe; done
+            rpm -qpl build/Pollen-*.rpm | grep -x /opt/pollen/pollen
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pollen-linux-i686
+          path: |
+            build/Pollen-*.tar.gz
+            build/Pollen-*.tar.xz
+            build/Pollen-*.zip
+            build/Pollen-*.deb
+            build/Pollen-*.rpm
+          compression-level: 0
           if-no-files-found: error
 
   windows-build:
@@ -300,6 +388,85 @@ jobs:
           path: Pollen-*.zip
           if-no-files-found: error
 
+  windows-package:
+    name: Package Windows ${{ matrix.platform }}
+    needs: windows
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-ucrt64, windows-i686, windows-clangarm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nsis p7zip-full unzip
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: pollen-${{ matrix.platform }}
+          path: zip
+
+      - name: Make the .7z and the installer
+        run: bash .github/scripts/windows-package.sh "$(ls zip/Pollen-*-${{ matrix.platform }}.zip)" Pollen . packages
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pollen-${{ matrix.platform }}-installers
+          path: |
+            packages/Pollen-*.7z
+            packages/Pollen-*.exe
+          compression-level: 0
+          if-no-files-found: error
+
+  windows-installer:
+    name: Install on Windows ${{ matrix.platform }}
+    needs: windows-package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-ucrt64
+            runner: windows-latest
+          - platform: windows-i686
+            runner: windows-latest
+          - platform: windows-clangarm64
+            runner: windows-11-arm
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pollen-${{ matrix.platform }}-installers
+          path: packages
+
+      - name: Install and uninstall with the installer
+        run: |
+          $exe = Get-ChildItem packages/Pollen-*.exe | Select-Object -First 1
+          $dir = "$env:RUNNER_TEMP\PollenInstall"
+          $p = Start-Process -FilePath $exe.FullName -ArgumentList "/S", "/D=$dir" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Error "the installer exited with $($p.ExitCode)"; exit 1 }
+          foreach ($f in @("pollen.exe", "README.md")) {
+            if (-not (Test-Path "$dir\$f")) { Write-Error "the installer didn't put $f in $dir"; exit 1 }
+          }
+          $keys = @("Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Pollen", "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Pollen")
+          $key = $keys | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $key) { Write-Error "the installer didn't register an uninstaller"; exit 1 }
+          $info = Get-ItemProperty $key
+          Write-Output "installed $($info.DisplayName) $($info.DisplayVersion) in $($info.InstallLocation)"
+          $menu = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Pollen"
+          if (-not (Test-Path "$menu\Pollen.lnk")) { Write-Error "the installer didn't add a Start menu shortcut"; exit 1 }
+          $p = Start-Process -FilePath "$dir\Uninstall.exe" -ArgumentList "/S", "_?=$dir" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Error "the uninstaller exited with $($p.ExitCode)"; exit 1 }
+          if (Test-Path "$dir\pollen.exe") { Write-Error "the uninstaller left pollen.exe behind"; exit 1 }
+          if (Test-Path $key) { Write-Error "the uninstaller left its registry key behind"; exit 1 }
+          if (Test-Path $menu) { Write-Error "the uninstaller left the Start menu folder behind"; exit 1 }
+
   macos:
     name: macOS ${{ matrix.arch }}
     needs: version
@@ -400,24 +567,70 @@ jobs:
           done
           if [ "$found" = 0 ]; then echo "::warning::--check didn't unpack the compiled script, so it wasn't checked"; fi
 
+      - name: Make Pollen.app and the disk image
+        continue-on-error: true
+        run: bash .github/scripts/macos-app.sh "$(ls build/Pollen-*-macos-${{ matrix.arch }}.tar.gz)" Pollen . build
+
+      - name: Test the disk image
+        continue-on-error: true
+        run: |
+          dmg=$(ls "$PWD"/build/Pollen-*.dmg)
+          mount="$RUNNER_TEMP/pollen-dmg"
+          mkdir -p "$mount"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$dmg"
+          trap 'hdiutil detach "$mount" -force || true' EXIT
+          test -L "$mount/Applications"
+          app="$mount/Pollen.app"
+          plutil -lint "$app/Contents/Info.plist"
+          test -f "$app/Contents/Resources/pollen.icns"
+          codesign --verify --verbose "$app" || echo "::warning::Pollen.app's ad-hoc signature doesn't verify"
+          "$app/Contents/MacOS/pollen" --version
+          XDG_CACHE_HOME="$RUNNER_TEMP/dmg-cache" "$app/Contents/MacOS/pollen" --check | tee dmg-check.txt
+          grep "built-in window ok, 1 compiled script" dmg-check.txt
+
       - uses: actions/upload-artifact@v4
         with:
           name: pollen-macos-${{ matrix.arch }}
-          path: build/Pollen-*.tar.gz
+          path: |
+            build/Pollen-*.tar.gz
+            build/Pollen-*.tar.xz
+            build/Pollen-*.zip
+            build/Pollen-*.dmg
+          compression-level: 0
           if-no-files-found: error
 
   publish:
     name: Attach packages to the release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, windows, macos]
+    needs: [linux, linux-i686, windows, windows-package, windows-installer, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: pollen-linux-*
           path: packages
           merge-multiple: true
 
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pollen-windows-*
+          path: packages
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pollen-macos-*
+          path: packages
+          merge-multiple: true
+
+      - name: List the packages
+        run: |
+          ls -l packages
+          if ! ls packages/Pollen-*.dmg > /dev/null 2>&1; then
+            echo "::warning::this release has no macOS disk image"
+          fi
+
       - uses: softprops/action-gh-release@v2
         with:
-          files: packages/*
+          files: packages/Pollen-*
           fail_on_unmatched_files: true
