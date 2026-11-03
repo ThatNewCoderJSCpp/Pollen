@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(pollen VERSION 0.1.5 DESCRIPTION "Pollen: a VRChat OSC app for Linux, Windows and macOS built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
+project(pollen VERSION 0.1.6 DESCRIPTION "Pollen: a VRChat OSC app for Linux, Windows and macOS built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -12,9 +12,9 @@ option(POLLEN_BUILD_APP "Build the Grove app (turn off to build only the osc lib
 option(POLLEN_BUILD_TESTS "Build the Pollen tests" ON)
 option(POLLEN_PACKAGE "Make release packages: pollen with its window and compiled script built in, linked so it runs without a compiler" OFF)
 option(POLLEN_BUNDLE "Run pollen-host --bundle as part of the build to make pollen with its window built in (turn off when cross-compiling, then bundle on the target)" ON)
-set(POLLEN_FIZMO_TAG "v0.3.11" CACHE STRING "Fizmo git tag to fetch (needs the net component)")
-set(POLLEN_GROVE_TAG "v0.2.11" CACHE STRING "Grove git tag to fetch")
-set(POLLEN_WALNUT_TAG "v0.2.12" CACHE STRING "Walnut git tag Grove fetches")
+set(POLLEN_FIZMO_TAG "v0.3.12" CACHE STRING "Fizmo git tag to fetch (needs the net component)")
+set(POLLEN_GROVE_TAG "v0.2.13" CACHE STRING "Grove git tag to fetch")
+set(POLLEN_WALNUT_TAG "v0.2.14" CACHE STRING "Walnut git tag Grove fetches")
 
 if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
